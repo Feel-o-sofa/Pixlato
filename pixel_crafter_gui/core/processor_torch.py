@@ -7,6 +7,7 @@ Supports CUDA, DirectML, and CPU fallback.
 
 from PIL import Image, ImageFilter
 import numpy as np
+from core.common import debug_log
 
 # ------------------------------------------------------------------------------
 # Lazy Import and Availability Check
@@ -14,6 +15,7 @@ import numpy as np
 
 _TORCH_AVAILABLE = None
 _TORCH_DEVICE = None
+_TORCH_DEVICE_NAME = None # Cache for device name
 
 def is_torch_available():
     """
@@ -27,10 +29,10 @@ def is_torch_available():
         try:
             import torch
             _TORCH_AVAILABLE = True
-            print("[Pixlato] PyTorch detected. GPU acceleration enabled.")
+            debug_log("[Pixlato] PyTorch detected. GPU acceleration enabled.")
         except ImportError:
             _TORCH_AVAILABLE = False
-            print("[Pixlato] PyTorch not found. GPU acceleration disabled.")
+            debug_log("[Pixlato] PyTorch not found. GPU acceleration disabled.")
     return _TORCH_AVAILABLE
 
 
@@ -49,10 +51,11 @@ def get_torch_device():
         import torch
         if torch.cuda.is_available():
             _TORCH_DEVICE = torch.device("cuda")
-            print(f"[Pixlato] Using CUDA device: {torch.cuda.get_device_name(0)}")
+            _TORCH_DEVICE_NAME = torch.cuda.get_device_name(0)
+            debug_log(f"[Pixlato] Using CUDA device: {_TORCH_DEVICE_NAME}")
         else:
             _TORCH_DEVICE = torch.device("cpu")
-            print("[Pixlato] CUDA not available. Using CPU for PyTorch operations.")
+            debug_log("[Pixlato] CUDA not available. Using CPU for PyTorch operations.")
     
     return _TORCH_DEVICE
 
@@ -108,7 +111,7 @@ def downsample_kmeans_torch(img, pixel_size, out_w, out_h):
     
     # Check image size for GPU safety
     if not check_gpu_memory_safe(img):
-        print(f"[Pixlato] Image too large for GPU ({img.size[0]}x{img.size[1]}). Using CPU backend.")
+        debug_log(f"[Pixlato] Image too large for GPU ({img.size[0]}x{img.size[1]}). Using CPU backend.")
         from core.processor_numpy import downsample_kmeans_numpy
         return downsample_kmeans_numpy(img, pixel_size, out_w, out_h)
     
@@ -185,7 +188,7 @@ def downsample_kmeans_torch(img, pixel_size, out_w, out_h):
     
     except RuntimeError as e:
         if "out of memory" in str(e).lower():
-            print(f"[Pixlato] GPU OOM detected. Falling back to CPU backend.")
+            debug_log(f"[Pixlato] GPU OOM detected. Falling back to CPU backend.")
             try:
                 import torch
                 torch.cuda.empty_cache()

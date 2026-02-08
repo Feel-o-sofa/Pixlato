@@ -9,7 +9,8 @@ import threading
 import time
 
 # Import core logic
-from core.processor import (pixelate_image, upscale_for_preview, add_outline, 
+from core.common import TaskManager, OperationCancelled, debug_log
+from core.processor import (EngineDispatcher, pixelate_image, upscale_for_preview, add_outline, 
                             remove_background, apply_grain_effect, remove_background_ai, 
                             remove_background_interactive, is_directml_supported,
                             normalize_image_geometry)
@@ -79,6 +80,7 @@ class PixelApp(ctk.CTk):
         self._is_restoring = False
         self.global_params = self.get_hardcoded_defaults()
         self.cached_defaults = self.get_hardcoded_defaults()
+        self.last_processed_params = {} # Cache for change detection
         self.inventory_reset_buttons = {}
         self.inventory_active_checkboxes = {}
 
@@ -143,6 +145,21 @@ class PixelApp(ctk.CTk):
         self.setting_mode_switch = ctk.CTkSegmentedButton(self.sidebar, values=[self.locale.get("mode_global"), self.locale.get("mode_individual")], command=self.on_setting_mode_change)
         self.setting_mode_switch.set(self.locale.get("mode_individual"))
         self.setting_mode_switch.pack(pady=5, padx=20, fill="x")
+        self.theme_manager.register_widget(self.setting_mode_switch)
+
+        # Engine Mode Switch (Phase 55)
+        self.label_engine_mode = ctk.CTkLabel(self.sidebar, text="", anchor="w")
+        self.label_engine_mode.pack(pady=(10, 0), padx=20, fill="x")
+        self.locale.register(self.label_engine_mode, "sidebar_engine_mode")
+
+        self.engine_switch = ctk.CTkSegmentedButton(self.sidebar, 
+                                                    values=[self.locale.get("engine_auto"), 
+                                                            self.locale.get("engine_cpu"), 
+                                                            self.locale.get("engine_gpu")], 
+                                                    command=self.on_engine_change)
+        self.engine_switch.set(self.locale.get("engine_auto"))
+        self.engine_switch.pack(pady=5, padx=20, fill="x")
+        self.theme_manager.register_widget(self.engine_switch)
         self.theme_manager.register_widget(self.setting_mode_switch)
 
         # Fixed Bottom Sidebar Area
@@ -248,6 +265,12 @@ class PixelApp(ctk.CTk):
         self.label_mapping_policy.pack(pady=(10, 0), fill="x")
         self.locale.register(self.label_mapping_policy, "sidebar_mapping_policy")
         self.mapping_policy_switch = ctk.CTkSegmentedButton(self.param_frame, values=[self.locale.get("policy_classic"), self.locale.get("policy_perceptual")], command=self.on_param_change)
+        self.mapping_policy_switch.set(self.locale.get("policy_classic"))
+        self.mapping_policy_switch.pack(pady=5, fill="x")
+        self.theme_manager.register_widget(self.mapping_policy_switch)
+
+        # ESC Binding for Interruption
+        self.bind_all("<Escape>", lambda e: self.cancel_current_task())
         self.mapping_policy_switch.set(self.locale.get("policy_classic"))
         self.mapping_policy_switch.pack(pady=5, fill="x")
         self.theme_manager.register_widget(self.mapping_policy_switch)
@@ -954,6 +977,31 @@ class PixelApp(ctk.CTk):
             self._is_restoring = False
             print(f"Error restore: {e}")
 
+    def on_engine_change(self, value):
+        """Handler for Engine Mode segmented button."""
+        from core.processor import EngineDispatcher
+        
+        # Internal mapping
+        mapping = {
+            self.locale.get("engine_auto"): "auto",
+            self.locale.get("engine_cpu"): "cpu",
+            self.locale.get("engine_gpu"): "gpu"
+        }
+        mode = mapping.get(value, "auto")
+        EngineDispatcher.set_mode(mode)
+        
+        # Reset current task to stop previous backend operations
+        self.cancel_current_task()
+        
+        # Re-trigger processing with new backend
+        self.on_param_change()
+
+    def cancel_current_task(self):
+        """Interrupts currently running background task."""
+        TaskManager.interrupt_all()
+        self.status_label.configure(text=f"❌ Stopped", text_color="#e74c3c")
+        self.after(2000, lambda: self.status_label.configure(text="", text_color="#2ecc71"))
+
     def on_param_change(self, *args):
         if self._is_restoring: return
         
@@ -1018,11 +1066,7 @@ class PixelApp(ctk.CTk):
             self._start_threaded_process("path", self.original_image_path)
 
     def _start_threaded_process(self, source_type, source_data, params_override=None):
-        if self._is_processing:
-            self._pending_reprocess = True
-            return
-
-        # Priority: params_override > Individual Entry > Global State
+        # 1. Capture/Determine Parameters
         if params_override:
             params = params_override
         elif self.current_inventory_id is not None:
@@ -1035,6 +1079,23 @@ class PixelApp(ctk.CTk):
         else:
             params = self.capture_ui_state()
 
+        # 2. Change Detection Optimization
+        # If parameters haven't changed for this specific entry/source, skip processing
+        state_key = (self.current_inventory_id if self.current_inventory_id is not None else source_data)
+        if self.last_processed_params.get(state_key) == params:
+            return
+
+        if self._is_processing:
+            self._pending_reprocess = True
+            # New request invalidates ongoing one
+            TaskManager.interrupt_all()
+            return
+
+        # Start New Task
+        current_task_id = TaskManager.start_new_task()
+        self.last_processed_params[state_key] = params.copy() # Update cache
+        self.status_label.configure(text="⏳ Processing... (ESC to cancel)", text_color="#e67e22")
+
         def run():
             try:
                 # 1. Get Base Image (RGBA)
@@ -1044,13 +1105,14 @@ class PixelApp(ctk.CTk):
                     img = source_data.convert("RGBA")
                 
                 self.original_size = img.size
+                TaskManager.check(current_task_id)
                 
                 # 2. Check Background Removal Cache
                 img_no_bg = None
                 current_bg_params = {
                     "bg_mode": params.get("bg_mode", "None"),
                     "bg_seeds": params.get("bg_seeds", []),
-                    "fg_seeds": params.get("fg_seeds", [])
+                    "foreground_seeds": params.get("foreground_seeds", []) # Fixed name
                 }
                 
                 entry = self.image_manager.get_image(self.current_inventory_id) if self.current_inventory_id is not None else None
@@ -1066,7 +1128,7 @@ class PixelApp(ctk.CTk):
                     if bg_m == "AI Auto":
                         img_no_bg = remove_background_ai(img_no_bg)
                     elif bg_m == "Interactive" and current_bg_params["bg_seeds"]:
-                        img_no_bg = remove_background_interactive(img_no_bg, current_bg_params["bg_seeds"], current_bg_params["fg_seeds"])
+                        img_no_bg = remove_background_interactive(img_no_bg, current_bg_params["bg_seeds"], current_bg_params["foreground_seeds"])
                     elif bg_m == "Classic":
                         img_no_bg = remove_background(img_no_bg, tolerance=40)
                     
@@ -1075,18 +1137,23 @@ class PixelApp(ctk.CTk):
                         entry["bg_processed_image"] = img_no_bg
                         entry["last_bg_params"] = current_bg_params.copy()
 
+                TaskManager.check(current_task_id)
+
                 # 3. Rest of the Pipeline (Light Tasks)
                 raw = pixelate_image(img_no_bg, params["pixel_size"], 
                                      edge_enhance=params["edge_enhance"], 
                                      edge_sensitivity=params["edge_sensitivity"], 
                                      downsample_method=params["downsample_method"], 
                                      plugin_engine=self.plugin_engine, 
-                                     plugin_params=params)
+                                     plugin_params=params,
+                                     task_id=current_task_id)
 
                 if not raw: 
                     self.after(0, self._on_processing_complete, None)
                     return
                 
+                TaskManager.check(current_task_id)
+
                 p_name = params["palette_mode"]
                 if p_name == "USER CUSTOM":
                     p_name, p_param = "Custom_User", params["custom_colors"]
@@ -1099,7 +1166,9 @@ class PixelApp(ctk.CTk):
                                             extract_policy=params["extract_policy"],
                                             mapping_policy=params["mapping_policy"],
                                             w_sat=params["rap_w_sat"], w_con=params["rap_w_con"], w_rar=params["rap_w_rar"],
-                                            auto_optimal=params.get("auto_optimal", False))
+                                            auto_optimal=params.get("auto_optimal", False),
+                                            task_id=current_task_id)
+                
                 proc = self.plugin_engine.execute_hook("POST_PALETTE", proc, params)
                 
                 # Apply Native Grain Effect (at the small pixel scale)
@@ -1108,10 +1177,17 @@ class PixelApp(ctk.CTk):
                 
                 if params["outline"]: proc = add_outline(proc)
                 proc = self.plugin_engine.execute_hook("FINAL_IMAGE", proc, params)
+                
+                TaskManager.check(current_task_id)
                 prev = upscale_for_preview(proc, self.original_size)
+                
                 self.after(0, self._on_processing_complete, proc, prev)
+                
+            except OperationCancelled:
+                debug_log(f"[Engine] Task {current_task_id} cancelled.")
+                self.after(0, self._on_processing_complete, None)
             except Exception as e: 
-                print(f"Thread error: {e}")
+                debug_log(f"Thread error: {e}")
                 self.after(0, self._on_processing_complete, None)
 
         threading.Thread(target=run, daemon=True).start()

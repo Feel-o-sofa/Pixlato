@@ -7,6 +7,7 @@ This module provides fallback implementations when PyTorch is unavailable.
 
 from PIL import Image, ImageFilter, ImageDraw
 import numpy as np
+from core.common import TaskManager
 
 # ------------------------------------------------------------------------------
 # Downsampling Functions
@@ -28,7 +29,7 @@ def downsample_numpy(img, out_w, out_h):
     return img.resize((out_w, out_h), resample=Image.BOX)
 
 
-def downsample_kmeans_numpy(img, pixel_size, out_w, out_h):
+def downsample_kmeans_numpy(img, pixel_size, out_w, out_h, task_id=None):
     """
     CPU-based adaptive K-Means downsampling using pure NumPy.
     This is a fallback when PyTorch is unavailable.
@@ -83,6 +84,7 @@ def downsample_kmeans_numpy(img, pixel_size, out_w, out_h):
         hv_indices = np.where(high_var_mask)[0]
         
         for idx in hv_indices:
+            TaskManager.check(task_id)
             pixels = rgb[idx]  # (N, 3)
             
             # Calculate luminance for initial cluster selection

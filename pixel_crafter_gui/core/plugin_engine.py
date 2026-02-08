@@ -77,11 +77,13 @@ class PluginEngine:
                     safe_builtins[b] = getattr(builtins, b)
 
             # 2. Define plugin-level globals
+            from core.context import ProcessingContext
             safe_globals = {
                 "__builtins__": safe_builtins,
                 "__name__": f"plugins.{plugin_id}",
                 "__file__": script_path,
                 "BasePlugin": BasePlugin,
+                "ProcessingContext": ProcessingContext,
                 "Image": Image,
                 "ImageDraw": ImageDraw,
                 "ImageFont": ImageFont,
@@ -120,17 +122,65 @@ class PluginEngine:
         except Exception as e:
             print(f"Failed to load plugin from {folder_path}: {e}")
 
-    def execute_hook(self, hook_name, image, params):
+    def execute_hook(self, hook_name, context, params):
+        """
+        Executes all active plugins for a given hook.
+        Supports both traditional PIL and high-performance Context pipelines.
+        """
         if hook_name not in self.hooks:
-            return image
+            return context
 
-        current_image = image
+        # Support both raw PIL objects and ProcessingContext
+        is_context = hasattr(context, "get_pil")
+        
+        from core.processor import EngineDispatcher
+        current_backend = EngineDispatcher.get_backend()
+
         for plugin_id in self.hooks[hook_name]:
             plugin_data = self.plugins.get(plugin_id)
-            if plugin_data and plugin_data["enabled"]:
-                try:
-                    current_image = plugin_data["instance"].run(current_image, params)
-                except Exception as e:
-                    print(f"Plugin {plugin_id} failed during {hook_name}: {e}")
+            if not (plugin_data and plugin_data["enabled"]):
+                continue
+
+            meta = plugin_data["metadata"]
+            instance = plugin_data["instance"]
             
-        return current_image
+            # --- Hardware Guard: Execution Policy Check ---
+            policy = meta.get("execution_policy", "Universal")
+            
+            if current_backend == "cpu":
+                if policy == "Must_GPU":
+                    print(f"[Engine] Skipping {plugin_id}: Requires GPU (Engine in CPU mode)")
+                    continue
+                elif policy == "Prefer_GPU":
+                    # Fallback notice (actual fallback happens inside plugin logic if implemented)
+                    pass
+
+            try:
+                # --- Zero-Copy Optimization ---
+                # Check for high-performance entry points
+                if is_context:
+                    if hasattr(instance, "run_tensor") and current_backend == "gpu":
+                        # Plugin supports direct Tensor manipulation
+                        import torch
+                        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                        tensor = context.get_tensor(device)
+                        new_tensor = instance.run_tensor(tensor, params)
+                        if new_tensor is not None:
+                            context.update_tensor(new_tensor)
+                    elif hasattr(instance, "run_context"):
+                        # Plugin supports full context manipulation
+                        context = instance.run_context(context, params)
+                    else:
+                        # Legacy sync to PIL
+                        img = context.get_pil()
+                        new_img = instance.run(img, params)
+                        if new_img is not None:
+                            context.set_pil(new_img)
+                else:
+                    # Legacy raw PIL pipeline
+                    context = instance.run(context, params)
+                    
+            except Exception as e:
+                print(f"Plugin {plugin_id} failed during {hook_name}: {e}")
+            
+        return context

@@ -1,6 +1,7 @@
 from PIL import Image, ImageEnhance, ImageChops
 import numpy as np
 import colorsys
+from core.common import TaskManager
 
 def rgb_to_lab(rgb_arr):
     """
@@ -42,7 +43,7 @@ def rgb_to_lab(rgb_arr):
     
     return np.stack([l, a, b], axis=-1)
 
-def map_to_palette_lab(img, palette_colors):
+def map_to_palette_lab(img, palette_colors, task_id=None):
     """
     Maps an image to a palette using CIE LAB color space for maximum perceptual accuracy.
     palette_colors: List of RGB tuples [(r,g,b), ...]
@@ -65,6 +66,7 @@ def map_to_palette_lab(img, palette_colors):
     indices = np.zeros(pixels_lab.shape[0], dtype=np.int32)
     
     for i in range(0, pixels_lab.shape[0], chunk_size):
+        TaskManager.check(task_id)
         end = min(i + chunk_size, pixels_lab.shape[0])
         chunk = pixels_lab[i:end, np.newaxis, :] # [chunk, 1, 3]
         diffs = chunk - pal_lab[np.newaxis, :, :] # [chunk, N, 3]
@@ -196,7 +198,7 @@ def export_as_gpl(path, colors, name="Pixlato Export"):
         print(f"Error exporting GPL: {e}")
         return False
 
-def extract_aesthetic_palette(img, color_count=16, w_sat=0.4, w_con=0.3, w_rar=0.3):
+def extract_aesthetic_palette(img, color_count=16, w_sat=0.4, w_con=0.3, w_rar=0.3, task_id=None):
     """
     Optimized Weighted Extraction: Scores pixels by Saturation, Contrast, and Uniqueness.
     Uses downsampling for analysis speed and vectorized operations.
@@ -257,7 +259,8 @@ def extract_aesthetic_palette(img, color_count=16, w_sat=0.4, w_con=0.3, w_rar=0
     # 10-15 is a noticeable difference.
     min_delta_e_sq = 15.0 ** 2 
 
-    for _ in range(color_count):
+    for i in range(color_count):
+        TaskManager.check(task_id)
         best_idx = np.argmax(current_scores)
         if current_scores[best_idx] <= 0: break
         
@@ -276,7 +279,7 @@ def extract_aesthetic_palette(img, color_count=16, w_sat=0.4, w_con=0.3, w_rar=0
     res_rgb = [(int(p[0]*255), int(p[1]*255), int(p[2]*255)) for p in pixels[selected_indices]]
     return res_rgb
 
-def extract_geometric_palette(img, color_count=16):
+def extract_geometric_palette(img, color_count=16, task_id=None):
     """
     Plan B: Geometric Volume Preservation Extraction.
     Analyzes the 3D color gamut and ensures boundary points (highlights/extremes) are preserved.
@@ -344,6 +347,7 @@ def extract_geometric_palette(img, color_count=16):
     min_dist_sq = 20.0 ** 2 
     
     for cand_rgb in candidate_rgbs:
+        TaskManager.check(task_id)
         if len(palette) >= color_count: break
         
         # Check distance from already picked colors in LAB space
@@ -368,7 +372,7 @@ def map_to_palette_perceptual(img, palette_img):
 
 def apply_palette_unified(img, palette_name="Original", custom_colors=None, dither=True, 
                           extract_policy="Standard", mapping_policy="Classic",
-                          w_sat=0.4, w_con=0.3, w_rar=0.3, auto_optimal=False):
+                          w_sat=0.4, w_con=0.3, w_rar=0.3, auto_optimal=False, task_id=None):
     """
     Updated Pipeline supporting Auto Optimal spatial refinement.
     """
@@ -395,14 +399,14 @@ def apply_palette_unified(img, palette_name="Original", custom_colors=None, dith
         if auto_optimal:
             # Plan B + Consolidation (Task 48.3)
             # Try to extract a generous gamut then consolidate
-            raw_colors = extract_geometric_palette(rgb_img, color_count=64)
+            raw_colors = extract_geometric_palette(rgb_img, color_count=64, task_id=task_id)
             colors = consolidate_palette(raw_colors, threshold=6.0) # Merge very similar colors
         elif extract_policy == "Aesthetic":
             colors = extract_aesthetic_palette(rgb_img, count,
-                                              w_sat=w_sat, w_con=w_con, w_rar=w_rar)
+                                              w_sat=w_sat, w_con=w_con, w_rar=w_rar, task_id=task_id)
         else:
             # Standard Policy now uses Plan B (Geometric Volume Preservation)
-            colors = extract_geometric_palette(rgb_img, count)
+            colors = extract_geometric_palette(rgb_img, count, task_id=task_id)
             
         # Create palette image from custom list
         flat = []
@@ -428,7 +432,7 @@ def apply_palette_unified(img, palette_name="Original", custom_colors=None, dith
         if auto_optimal or mapping_policy == "Perceptual":
             # CIE LAB Perceptual Mapping
             if not dither:
-                result_rgb = map_to_palette_lab(rgb_img, current_palette_colors)
+                result_rgb = map_to_palette_lab(rgb_img, current_palette_colors, task_id=task_id)
             else:
                 enhancer = ImageEnhance.Color(rgb_img)
                 mapping_src = enhancer.enhance(1.2)

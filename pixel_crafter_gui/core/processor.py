@@ -7,6 +7,7 @@ Backend selection is handled by EngineDispatcher.
 
 from PIL import Image, ImageFilter
 import numpy as np
+from core.common import debug_log
 
 # Security: Prevent decompression bomb attacks by limiting max pixels (e.g., 100MP)
 Image.MAX_IMAGE_PIXELS = 100_000_000
@@ -22,6 +23,7 @@ class EngineDispatcher:
     """
     _mode = "auto"  # Default: auto-detect best backend
     _torch_available = None  # Cached availability check
+    _has_cuda = None        # Cached CUDA check
     
     @classmethod
     def set_mode(cls, mode):
@@ -33,7 +35,7 @@ class EngineDispatcher:
         """
         if mode in ["auto", "cpu", "gpu"]:
             cls._mode = mode
-            print(f"[Pixlato] Engine mode set to: {mode}")
+            debug_log(f"[Pixlato] Engine mode set to: {mode}")
     
     @classmethod
     def get_mode(cls):
@@ -51,7 +53,7 @@ class EngineDispatcher:
                 cls._torch_available = is_torch_available()
             except ImportError:
                 cls._torch_available = False
-                print("[Pixlato] processor_torch module not found.")
+                debug_log("[Pixlato] processor_torch module not found.")
         return cls._torch_available
     
     @classmethod
@@ -149,73 +151,63 @@ def remove_background(img, tolerance=50):
         print(f"Background Remove Error: {e}")
         return img
 
-def pixelate_image(img, pixel_size, target_width=None, edge_enhance=False, edge_sensitivity=1.0, downsample_method="Standard", plugin_engine=None, plugin_params=None):
+def pixelate_image(img, pixel_size, target_width=None, edge_enhance=False, edge_sensitivity=1.0, downsample_method="Standard", plugin_engine=None, plugin_params=None, task_id=None):
     """
     [PUBLIC API - Signature must remain stable]
     
     Processes a PIL image and reduces its resolution.
-    Uses EngineDispatcher to select the optimal backend (GPU/CPU).
-    
-    Args:
-        img: PIL Image (RGBA)
-        pixel_size: Size of each output pixel block
-        target_width: Reserved for future use
-        edge_enhance: Enable edge enhancement preprocessing
-        edge_sensitivity: Strength of edge enhancement (0.0-2.0)
-        downsample_method: 'Standard' (BOX) or 'K-Means' (adaptive)
-        plugin_engine: Optional PluginEngine for hook execution
-        plugin_params: Parameters for plugin hooks
-    
-    Returns:
-        PIL Image (RGBA) - downsampled result
+    Uses EngineDispatcher to select the optimal backend (GPU/CPU) via ProcessingContext.
     """
     if img is None:
         return None
 
-    # Apply edge enhancement if requested (before downsampling)
-    if edge_enhance and edge_sensitivity > 0:
-        img = enhance_internal_edges(img, edge_sensitivity)
-
-    # [Hook] PRE_DOWNSAMPLE
-    if plugin_engine:
-        img = plugin_engine.execute_hook("PRE_DOWNSAMPLE", img, plugin_params)
-
-    original_width, original_height = img.size
+    from core.context import ProcessingContext
+    backend = EngineDispatcher.get_backend()
     
-    # Ensure at least 1x1
+    # Init context with source image
+    ctx = ProcessingContext(img, device="cuda" if backend == "gpu" else "cpu")
+
+    # 1. PRE-PROCESS: Edge Enhancement
+    if edge_enhance and edge_sensitivity > 0:
+        enhanced = enhance_internal_edges(ctx.get_pil(), edge_sensitivity)
+        ctx.set_pil(enhanced)
+
+    # 2. [Hook] PRE_DOWNSAMPLE (Context-aware)
+    if plugin_engine:
+        # Update plugin_params with task_id for contextual awareness if needed
+        params = (plugin_params or {}).copy()
+        params["_task_id"] = task_id
+        ctx = plugin_engine.execute_hook("PRE_DOWNSAMPLE", ctx, params)
+
+    original_width, original_height = ctx.size
+    
+    # Output dimensions
     small_width = max(1, original_width // pixel_size)
     small_height = max(1, original_height // pixel_size)
 
-    # Select downsampling method with backend dispatching
+    # 3. DOWNSAMPLE
     if downsample_method == "K-Means":
-        backend = EngineDispatcher.get_backend()
-        
-        if backend == "gpu":
-            # Use PyTorch GPU backend
-            try:
-                from core.processor_torch import downsample_kmeans_torch
-                small_img = downsample_kmeans_torch(img, pixel_size, small_width, small_height)
-            except ImportError:
-                # Fallback to NumPy if import fails
-                from core.processor_numpy import downsample_kmeans_numpy
-                small_img = downsample_kmeans_numpy(img, pixel_size, small_width, small_height)
-        else:
-            # Use NumPy CPU backend
-            from core.processor_numpy import downsample_kmeans_numpy
-            small_img = downsample_kmeans_numpy(img, pixel_size, small_width, small_height)
+        # Implementation in processor_torch/processor_numpy already handles their own logic.
+        # Here we use the legacy wrapper which now smartly dispatches.
+        small_img_pil = downsample_kmeans_adaptive(ctx.get_pil(), pixel_size, small_width, small_height, task_id=task_id)
+        ctx.set_pil(small_img_pil) # Downsampling changes resolution, we reset context to new small image
     else:
-        # Standard BOX - always use PIL (fastest)
-        small_img = img.resize((small_width, small_height), resample=Image.BOX)
+        # Standard BOX (PIL is fastest for simple resize)
+        small_img_pil = ctx.get_pil().resize((small_width, small_height), resample=Image.BOX)
+        ctx.set_pil(small_img_pil)
 
-    # [Hook] POST_DOWNSAMPLE
+    # 4. [Hook] POST_DOWNSAMPLE (Context-aware)
     if plugin_engine:
-        small_img = plugin_engine.execute_hook("POST_DOWNSAMPLE", small_img, plugin_params)
+        params = (plugin_params or {}).copy()
+        params["_task_id"] = task_id
+        ctx = plugin_engine.execute_hook("POST_DOWNSAMPLE", ctx, params)
 
-    return small_img
+    # Return final PIL image from context
+    return ctx.get_pil()
 
 
 
-def downsample_kmeans_adaptive(img, pixel_size, out_w, out_h):
+def downsample_kmeans_adaptive(img, pixel_size, out_w, out_h, task_id=None):
     """
     [LEGACY WRAPPER - For backward compatibility]
     
@@ -232,17 +224,19 @@ def downsample_kmeans_adaptive(img, pixel_size, out_w, out_h):
         PIL Image (RGBA)
     """
     backend = EngineDispatcher.get_backend()
-    
     if backend == "gpu":
+        # Use PyTorch GPU backend
         try:
             from core.processor_torch import downsample_kmeans_torch
             return downsample_kmeans_torch(img, pixel_size, out_w, out_h)
         except ImportError:
-            pass
-    
-    # CPU fallback
-    from core.processor_numpy import downsample_kmeans_numpy
-    return downsample_kmeans_numpy(img, pixel_size, out_w, out_h)
+            # Fallback to NumPy if import fails
+            from core.processor_numpy import downsample_kmeans_numpy
+            return downsample_kmeans_numpy(img, pixel_size, out_w, out_h, task_id=task_id)
+    else:
+        # Use NumPy CPU backend
+        from core.processor_numpy import downsample_kmeans_numpy
+        return downsample_kmeans_numpy(img, pixel_size, out_w, out_h, task_id=task_id)
 
 def normalize_image_geometry(img, target_size, strategy="Fit & Pad", bg_color=(0, 0, 0, 0)):
     """
