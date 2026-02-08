@@ -1,8 +1,82 @@
+"""
+Pixlato - Core Image Processor (Facade Layer)
+==============================================
+This module provides the public API for image processing.
+Backend selection is handled by EngineDispatcher.
+"""
+
 from PIL import Image, ImageFilter
 import numpy as np
 
 # Security: Prevent decompression bomb attacks by limiting max pixels (e.g., 100MP)
-Image.MAX_IMAGE_PIXELS = 100_000_000 
+Image.MAX_IMAGE_PIXELS = 100_000_000
+
+# ------------------------------------------------------------------------------
+# Engine Dispatcher - Backend Selection Logic
+# ------------------------------------------------------------------------------
+
+class EngineDispatcher:
+    """
+    Manages backend selection for image processing operations.
+    Supports three modes: 'auto', 'cpu', 'gpu'
+    """
+    _mode = "auto"  # Default: auto-detect best backend
+    _torch_available = None  # Cached availability check
+    
+    @classmethod
+    def set_mode(cls, mode):
+        """
+        Sets the processing mode.
+        
+        Args:
+            mode: 'auto' (default), 'cpu' (force NumPy), or 'gpu' (force PyTorch)
+        """
+        if mode in ["auto", "cpu", "gpu"]:
+            cls._mode = mode
+            print(f"[Pixlato] Engine mode set to: {mode}")
+    
+    @classmethod
+    def get_mode(cls):
+        """Returns the current engine mode."""
+        return cls._mode
+    
+    @classmethod
+    def is_torch_available(cls):
+        """
+        Lazily checks if PyTorch is available. Result is cached.
+        """
+        if cls._torch_available is None:
+            try:
+                from core.processor_torch import is_torch_available
+                cls._torch_available = is_torch_available()
+            except ImportError:
+                cls._torch_available = False
+                print("[Pixlato] processor_torch module not found.")
+        return cls._torch_available
+    
+    @classmethod
+    def get_backend(cls):
+        """
+        Determines which backend to use based on mode and availability.
+        
+        Returns:
+            str: 'gpu' or 'cpu'
+        """
+        if cls._mode == "cpu":
+            return "cpu"
+        
+        if cls._mode == "gpu":
+            if cls.is_torch_available():
+                return "gpu"
+            else:
+                print("[Pixlato] GPU mode requested but PyTorch unavailable. Using CPU.")
+                return "cpu"
+        
+        # Auto mode: use GPU if available
+        if cls._mode == "auto":
+            return "gpu" if cls.is_torch_available() else "cpu"
+        
+        return "cpu"
 
 def enhance_internal_edges(img, sensitivity=1.0):
     """
@@ -77,8 +151,23 @@ def remove_background(img, tolerance=50):
 
 def pixelate_image(img, pixel_size, target_width=None, edge_enhance=False, edge_sensitivity=1.0, downsample_method="Standard", plugin_engine=None, plugin_params=None):
     """
+    [PUBLIC API - Signature must remain stable]
+    
     Processes a PIL image and reduces its resolution.
-    Expects 'img' to be a PIL Image (RGBA).
+    Uses EngineDispatcher to select the optimal backend (GPU/CPU).
+    
+    Args:
+        img: PIL Image (RGBA)
+        pixel_size: Size of each output pixel block
+        target_width: Reserved for future use
+        edge_enhance: Enable edge enhancement preprocessing
+        edge_sensitivity: Strength of edge enhancement (0.0-2.0)
+        downsample_method: 'Standard' (BOX) or 'K-Means' (adaptive)
+        plugin_engine: Optional PluginEngine for hook execution
+        plugin_params: Parameters for plugin hooks
+    
+    Returns:
+        PIL Image (RGBA) - downsampled result
     """
     if img is None:
         return None
@@ -97,11 +186,25 @@ def pixelate_image(img, pixel_size, target_width=None, edge_enhance=False, edge_
     small_width = max(1, original_width // pixel_size)
     small_height = max(1, original_height // pixel_size)
 
-    # Select downsampling method
+    # Select downsampling method with backend dispatching
     if downsample_method == "K-Means":
-        small_img = downsample_kmeans_adaptive(img, pixel_size, small_width, small_height)
+        backend = EngineDispatcher.get_backend()
+        
+        if backend == "gpu":
+            # Use PyTorch GPU backend
+            try:
+                from core.processor_torch import downsample_kmeans_torch
+                small_img = downsample_kmeans_torch(img, pixel_size, small_width, small_height)
+            except ImportError:
+                # Fallback to NumPy if import fails
+                from core.processor_numpy import downsample_kmeans_numpy
+                small_img = downsample_kmeans_numpy(img, pixel_size, small_width, small_height)
+        else:
+            # Use NumPy CPU backend
+            from core.processor_numpy import downsample_kmeans_numpy
+            small_img = downsample_kmeans_numpy(img, pixel_size, small_width, small_height)
     else:
-        # Standard BOX
+        # Standard BOX - always use PIL (fastest)
         small_img = img.resize((small_width, small_height), resample=Image.BOX)
 
     # [Hook] POST_DOWNSAMPLE
@@ -114,90 +217,32 @@ def pixelate_image(img, pixel_size, target_width=None, edge_enhance=False, edge_
 
 def downsample_kmeans_adaptive(img, pixel_size, out_w, out_h):
     """
-    Hardware-accelerated downsampling using PyTorch. 
-    Vectorizes the K-Means logic across all blocks simultaneously.
+    [LEGACY WRAPPER - For backward compatibility]
+    
+    Hardware-accelerated downsampling using adaptive backend selection.
+    Delegates to processor_torch or processor_numpy based on EngineDispatcher.
+    
+    Args:
+        img: PIL Image (RGBA)
+        pixel_size: Size of each output pixel block
+        out_w: Output width
+        out_h: Output height
+    
+    Returns:
+        PIL Image (RGBA)
     """
-    try:
-        import torch
-    except ImportError:
-        # Emergency fallback (should not happen in this Phase)
-        return img.resize((out_w, out_h), resample=Image.BOX)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    backend = EngineDispatcher.get_backend()
     
-    # 1. Convert to float tensor
-    arr = np.array(img.convert("RGBA"))
-    h, w, _ = arr.shape
-    img_tensor = torch.from_numpy(arr).to(device).float()
+    if backend == "gpu":
+        try:
+            from core.processor_torch import downsample_kmeans_torch
+            return downsample_kmeans_torch(img, pixel_size, out_w, out_h)
+        except ImportError:
+            pass
     
-    # 2. Pad/Crop to exact required size for reshaping
-    target_h, target_w = out_h * pixel_size, out_w * pixel_size
-    img_tensor = img_tensor[:target_h, :target_w, :]
-    
-    # 3. Reshape to blocks: (out_h, out_w, ps, ps, 4)
-    # Then permute to (B, N, 4) where B = out_h * out_w, N = ps * ps
-    blocks = img_tensor.reshape(out_h, pixel_size, out_w, pixel_size, 4).permute(0, 2, 1, 3, 4)
-    num_blocks = out_h * out_w
-    block_pixels = blocks.reshape(num_blocks, -1, 4)
-    
-    rgb = block_pixels[..., :3]
-    alpha = block_pixels[..., 3]
-    
-    # 4. Compute variance to identify high-detail blocks
-    # Variance per block (sum of RGB variances)
-    block_variances = torch.var(rgb, dim=1).sum(dim=1)
-    
-    # Initial Result: Compute basic mean for all blocks
-    final_rgb = rgb.mean(dim=1)
-    
-    # 5. Adaptive K-Means for High Variance Blocks
-    # Threshold for "High Detail" (Approx 40 in 0-255 scale)
-    var_threshold = 40.0 * 3
-    high_var_mask = block_variances > var_threshold
-    
-    if high_var_mask.any():
-        hv_pixels = rgb[high_var_mask]  # (B_hv, N, 3)
-        b_hv = hv_pixels.shape[0]
-        
-        # Initialize 2 clusters per block: Darkest and Brightest pixels
-        lum = 0.299 * hv_pixels[...,0] + 0.587 * hv_pixels[...,1] + 0.114 * hv_pixels[...,2]
-        c0_idx = lum.argmin(dim=1)
-        c1_idx = lum.argmax(dim=1)
-        
-        batch_seq = torch.arange(b_hv, device=device)
-        c0 = hv_pixels[batch_seq, c0_idx].unsqueeze(1) # (B_hv, 1, 3)
-        c1 = hv_pixels[batch_seq, c1_idx].unsqueeze(1) # (B_hv, 1, 3)
-        centers = torch.cat([c0, c1], dim=1)           # (B_hv, 2, 3)
-        
-        # Simple K-Means iteration (K=2)
-        for _ in range(4):
-            # Assign: Calculate distance to centers
-            # dist shape: (B_hv, N, 2)
-            dist = torch.cdist(hv_pixels, centers)
-            labels = dist.argmin(dim=2) # (B_hv, N)
-            
-            # Update
-            m0 = (labels == 0).float().unsqueeze(-1)
-            m1 = (labels == 1).float().unsqueeze(-1)
-            
-            # Weighted mean update
-            centers[:, 0] = (hv_pixels * m0).sum(dim=1) / m0.sum(dim=1).clamp(min=1)
-            centers[:, 1] = (hv_pixels * m1).sum(dim=1) / m1.sum(dim=1).clamp(min=1)
-
-        # Selection: Choose the cluster furthest from the block mean (Contrast Selection)
-        hv_means = hv_pixels.mean(dim=1).unsqueeze(1)
-        dist_to_mean = torch.norm(centers - hv_means, dim=2)
-        best_cluster = dist_to_mean.argmax(dim=1)
-        
-        final_rgb[high_var_mask] = centers[batch_seq, best_cluster]
-
-    # 6. Combine RGB with Avg Alpha
-    final_alpha = alpha.mean(dim=1).unsqueeze(-1)
-    result_tensor = torch.cat([final_rgb, final_alpha], dim=1)
-    
-    # 7. Back to PIL
-    result_arr = result_tensor.reshape(out_h, out_w, 4).byte().cpu().numpy()
-    return Image.fromarray(result_arr, "RGBA")
+    # CPU fallback
+    from core.processor_numpy import downsample_kmeans_numpy
+    return downsample_kmeans_numpy(img, pixel_size, out_w, out_h)
 
 def normalize_image_geometry(img, target_size, strategy="Fit & Pad", bg_color=(0, 0, 0, 0)):
     """
