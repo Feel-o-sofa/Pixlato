@@ -62,7 +62,9 @@ class ImageManager:
                         "is_dirty": False,
                         "is_active_global": True, # For Phase 51
                         "bg_processed_image": None,
-                        "last_bg_params": None
+                        "last_bg_params": None,
+                        "processed_image": None,
+                        "preview_image": None
                     }
                     self.images.append(entry)
                     added_ids.append(self._next_id)
@@ -80,7 +82,9 @@ class ImageManager:
                     "is_dirty": False,
                     "is_active_global": True,
                     "bg_processed_image": None,
-                    "last_bg_params": None
+                    "last_bg_params": None,
+                    "processed_image": None,
+                    "preview_image": None
                 }
                 self.images.append(entry)
                 added_ids.append(self._next_id)

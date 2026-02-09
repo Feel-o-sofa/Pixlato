@@ -146,11 +146,14 @@ class PixelApp(ctk.CTk):
         self.btn_plugin_mgr.pack(pady=5, fill="x")
         self.btn_save.pack(pady=5, fill="x")
 
-        # Scroll Sidebar
-        self.scroll_sidebar.pack(side="top", fill="both", expand=True, padx=5, pady=5)
-        self.label_mode.pack(pady=(10, 0), padx=15, fill="x")
-        self.mode_switch.pack(pady=5, padx=15, fill="x")
-        self.param_frame.pack(fill="both", expand=True, padx=5)
+        # Scroll Sidebar - Remove outer padding to stretch to edges
+        self.scroll_sidebar.pack(side="top", fill="both", expand=True)
+        self.label_mode.pack(pady=(15, 0), padx=20, fill="x")
+        self.mode_switch.pack(pady=(5, 10), padx=20, fill="x")
+        
+        # Ensure the scrollable frame's internal container stretches
+        self.param_frame.pack(fill="x", expand=True)
+        self.param_frame.grid_columnconfigure(0, weight=1)
 
         # 3. Canvas Area Layout
         self.preview_frame.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
@@ -177,108 +180,50 @@ class PixelApp(ctk.CTk):
         self.btn_batch_export.pack(pady=10, padx=10, fill="x", side="bottom")
 
     def _regrid_sidebar(self):
-        """Orchestrates the layout of control groups in the sidebar based on current state."""
-        # Clean current layout
-        for child in self.param_frame.winfo_children():
-            child.grid_forget()
-        self.check_auto_optimal.pack_forget()
-        self.color_limit_group.pack_forget()
-        self.palette_group.grid_forget()
-        self.rap_frame.grid_forget()
-        self.fx_group.grid_forget()
-        self.setup_group.grid_forget()
-
-        current_row = 0
+        """Orchestrates visibility of sidebar elements without flickering (using grid/grid_remove)."""
         pal_mode = self.option_palette.get()
         is_auto = self.check_auto_optimal.get()
         extract_pol = self._get_logical(self.extract_policy_switch.get(), "extract_policy")
         bg_mode = self._get_logical(self.option_bg_mode.get(), "bg_mode")
 
-        # 1. Pixel Size (Always Visible)
-        self.pixel_group.grid(row=current_row, column=0, sticky="ew", pady=(10, 0))
-        self.pixel_group.grid_columnconfigure(0, weight=1)
-        self.label_pixel.master.pack(fill="x") 
-        self.label_pixel.pack(side="left")
-        self.pixel_spin.pack(side="right")
-        self.slider_pixel.pack(pady=(2, 5), fill="x")
-        current_row += 1
-
-        # 2. Palette & Optimization Group (Always Visible but internal logic varies)
-        self.palette_group.grid(row=current_row, column=0, sticky="ew", pady=5)
-        self.palette_group.grid_columnconfigure(0, weight=1)
-        
-        self.label_pal_preset.pack(pady=(5, 0), fill="x")
-        self.option_palette.pack(pady=5, fill="x")
-        
-        # Show/Hide Auto Optimal
+        # 1. Palette Group internal visibility
         if pal_mode in ["Limited", "Grayscale"]:
-            self.check_auto_optimal.pack(pady=5, fill="x")
-        
-        # 3. Color Limit Group (Conditional)
-        if pal_mode in ["Limited", "Grayscale"] and not is_auto:
-            self.color_limit_group.grid(row=current_row + 1, column=0, sticky="ew", pady=5)
-            self.color_limit_group.grid_columnconfigure(0, weight=1)
-            self.label_color_count.master.pack(fill="x", pady=(5, 0))
-            self.label_color_count.pack(side="left")
-            self.color_spinbox.pack(side="right")
-            self.color_slider.pack(pady=(2, 5), fill="x")
-            current_row += 1
-        
-        # 4. Policy & RAP Frame (Conditional)
-        if pal_mode == "Limited":
-            self.label_extract_policy.pack(pady=(10, 0), fill="x")
-            self.extract_policy_switch.pack(pady=5, fill="x")
-            if extract_pol == "Aesthetic":
-                self.rap_frame.grid(row=current_row + 1, column=0, sticky="ew", pady=5)
-                self.label_rap_header.pack(pady=(10, 0), fill="x")
-                current_row += 1
+            # Auto Optimal Checkbox
+            self.check_auto_optimal.pack(pady=5, padx=20, fill="x")
+            
+            # Color Limit Slider Group
+            if not is_auto:
+                self.color_limit_group.grid() # Re-show with remembered options
             else:
-                self.rap_frame.grid_forget()
+                self.color_limit_group.grid_remove() # Hide but keep metadata
         else:
-            self.label_extract_policy.pack_forget()
-            self.extract_policy_switch.pack_forget()
-            self.rap_frame.grid_forget()
+            self.check_auto_optimal.pack_forget()
+            self.color_limit_group.grid_remove()
 
-        self.label_mapping_policy.pack(pady=(10, 0), fill="x")
-        self.mapping_policy_switch.pack(pady=5, fill="x")
-        self.btn_custom_pal.pack(pady=5, fill="x")
-        self.check_dither.pack(pady=5, fill="x")
-        current_row += 1
+        # 2. RAP Aesthetics (Conditional visibility)
+        if pal_mode == "Limited" and extract_pol == "Aesthetic":
+            self.rap_frame.grid()
+        else:
+            self.rap_frame.grid_remove()
 
-        # 5. Visual Effects Group (Always Visible)
-        self.fx_group.grid(row=current_row, column=0, sticky="ew", pady=5)
-        self.fx_group.grid_columnconfigure(0, weight=1)
-        self.label_vis_fx.pack(pady=(10, 0), fill="x")
-        self.bg_frame.pack(fill="x", pady=2)
-        self.label_bg_mode.pack(side="left")
-        self.option_bg_mode.pack(pady=2, fill="x")
-        
-        # Dynamic BG seeds button
+        # 3. Background removal helpers
         if bg_mode == "Interactive":
-            self.btn_clear_seeds.pack(pady=2, fill="x")
-            self.label_interactive_helper.pack(pady=2, fill="x")
+            self.btn_clear_seeds.pack(pady=2, padx=20, fill="x")
+            self.label_interactive_helper.pack(pady=2, padx=20, fill="x")
         else:
             self.btn_clear_seeds.pack_forget()
             self.label_interactive_helper.pack_forget()
 
-        self.check_outline.pack(pady=5, fill="x")
-        self.edge_group.pack(fill="x", pady=5)
-        self.check_edge_enhance.pack(fill="x")
-        self.edge_controls_container.pack(fill="x", padx=(25, 0))
-        self.grain_group.pack(fill="x", pady=5)
-        self.check_grain.pack(fill="x")
-        self.grain_controls_container.pack(fill="x", padx=(25, 0))
-        current_row += 1
+        # 4. FX Expanded items (Edge & Grain)
+        if self.check_edge_enhance.get():
+            self.edge_controls_container.pack(fill="x", padx=(35, 20), pady=(0, 5))
+        else:
+            self.edge_controls_container.pack_forget()
 
-        # 6. Global Setup (Always Visible)
-        self.setup_group.grid(row=current_row, column=0, sticky="ew", pady=10)
-        self.setup_group.grid_columnconfigure(0, weight=1)
-        self.label_downsample.pack(pady=(5, 0), fill="x")
-        self.option_downsample.pack(pady=5, fill="x")
-        self.label_presets_header.pack(pady=(15, 0), fill="x")
-        self.preset_frame_inner.pack(fill="x", pady=5)
-        self.option_theme.pack(pady=5, fill="x")
-        self.btn_custom_accent.pack(pady=2, fill="x")
+        if self.check_grain.get():
+            self.grain_controls_container.pack(fill="x", padx=(35, 20), pady=(0, 5))
+        else:
+            self.grain_controls_container.pack_forget()
 
     def _create_navbar(self):
         """Creates the top navigation bar and its children."""
@@ -312,8 +257,23 @@ class PixelApp(ctk.CTk):
 
     def _create_sidebar(self):
         """Creates the sidebar and all its internal control groups."""
-        self.sidebar = ctk.CTkFrame(self, width=320, corner_radius=0)
+        # Main sidebar container
+        self.sidebar = ctk.CTkFrame(self, width=320, corner_radius=0, fg_color="#1a1a1a")
+        # No grid placement here, handled by _do_main_layout
         
+        self.scroll_sidebar = ctk.CTkScrollableFrame(self.sidebar, label_text="CONTROL PANEL", 
+                                                   label_font=("Arial", 12, "bold"),
+                                                   corner_radius=0, fg_color="transparent")
+        
+        # Access internal widgets of CTkScrollableFrame to eliminate gaps
+        try:
+            self.scroll_sidebar._parent_canvas.configure(highlightthickness=0)
+            self.scroll_sidebar._content_frame.configure(padx=0, pady=0)
+        except: pass
+        
+        self.param_frame = self.scroll_sidebar
+        self._create_sidebar_groups()
+
         # 2a. Top Sidebar Labels & Mode Switches
         self.logo_label = ctk.CTkLabel(self.sidebar, text="Pixlato ✨", font=ctk.CTkFont(size=28, weight="bold"))
 
@@ -365,91 +325,138 @@ class PixelApp(ctk.CTk):
         self.theme_manager.register_widget(self.mode_switch)
 
         self.param_frame = ctk.CTkFrame(self.scroll_sidebar, fg_color="transparent")
+        self.param_frame.pack(fill="x", expand=True) # Full width stretch
+        self.param_frame.grid_columnconfigure(0, weight=1)
 
         # 1. Pixel Size Group
         self.pixel_group = ctk.CTkFrame(self.param_frame, fg_color="transparent")
+        self.pixel_group.grid(row=0, column=0, sticky="ew", pady=(10, 5))
+        self.pixel_group.grid_columnconfigure(0, weight=1)
+        
         pixel_header = ctk.CTkFrame(self.pixel_group, fg_color="transparent")
+        pixel_header.pack(fill="x", padx=15)
         self.label_pixel = ctk.CTkLabel(pixel_header, text="", anchor="w", width=80)
         self.locale.register(self.label_pixel, "sidebar_pixel_size")
         self.pixel_spin = IntSpinbox(pixel_header, from_=1, to=128, width=100, command=self.update_pixel_from_spinbox)
         self.pixel_spin.set(2)
+        self.label_pixel.pack(side="left")
+        self.pixel_spin.pack(side="right")
+        
         self.slider_pixel = ctk.CTkSlider(self.pixel_group, from_=1, to=128, number_of_steps=127, command=self.update_pixel_from_slider)
         self.slider_pixel.set(2)
+        self.slider_pixel.pack(pady=(2, 5), padx=15, fill="x")
         self.theme_manager.register_widget(self.slider_pixel)
         bind_ctk_slider_wheel(self.slider_pixel)
 
-        # 2. Color Limit Group
+        # 2. Palette & Optimization Group
+        self.palette_group = ctk.CTkFrame(self.param_frame, fg_color="transparent")
+        self.palette_group.grid(row=1, column=0, sticky="ew", pady=5)
+        self.palette_group.grid_columnconfigure(0, weight=1)
+        
+        self.label_pal_preset = ctk.CTkLabel(self.palette_group, text="", anchor="w")
+        self.locale.register(self.label_pal_preset, "sidebar_palette_preset")
+        self.label_pal_preset.pack(pady=(5, 0), padx=15, fill="x")
+        
+        palette_values = ["Limited", "Original", "Grayscale", "GameBoy", "CGA", "Pico-8", "16-bit (4096 Colors)", "USER CUSTOM"]
+        self.option_palette = ctk.CTkOptionMenu(self.palette_group, values=palette_values, command=self.on_palette_menu_change)
+        self.option_palette.set("Limited")
+        self.option_palette.pack(pady=5, padx=15, fill="x")
+        self.theme_manager.register_widget(self.option_palette)
+
+        self.check_auto_optimal = ctk.CTkCheckBox(self.palette_group, text="", command=self.on_auto_optimal_toggle)
+        self.locale.register(self.check_auto_optimal, "sidebar_auto_optimal")
+        self.theme_manager.register_widget(self.check_auto_optimal)
+        # Not packed yet, managed by _regrid_sidebar
+
+        # 3. Color Limit Group (Conditional result, but fixed position)
         self.color_limit_group = ctk.CTkFrame(self.param_frame, fg_color="transparent")
+        self.color_limit_group.grid(row=2, column=0, sticky="ew", pady=5)
+        self.color_limit_group.grid_columnconfigure(0, weight=1)
+        
         color_header = ctk.CTkFrame(self.color_limit_group, fg_color="transparent")
+        color_header.pack(fill="x", padx=15)
         self.label_color_count = ctk.CTkLabel(color_header, text="", anchor="w", width=80)
         self.locale.register(self.label_color_count, "sidebar_color_limit")
         self.color_spinbox = IntSpinbox(color_header, from_=2, to=256, width=100, command=self.update_color_from_spinbox)
         self.color_spinbox.set(16)
+        self.label_color_count.pack(side="left")
+        self.color_spinbox.pack(side="right")
+        
         self.color_slider = ctk.CTkSlider(self.color_limit_group, from_=2, to=256, number_of_steps=254, command=self.update_color_from_slider)
         self.color_slider.set(16)
+        self.color_slider.pack(pady=(2, 5), padx=15, fill="x")
         self.theme_manager.register_widget(self.color_slider)
         bind_ctk_slider_wheel(self.color_slider)
 
-        # 3. Palette & Optimization Group
-        self.palette_group = ctk.CTkFrame(self.param_frame, fg_color="transparent")
-        self.check_auto_optimal = ctk.CTkCheckBox(self.palette_group, text="", command=self.on_auto_optimal_toggle)
-        self.locale.register(self.check_auto_optimal, "sidebar_auto_optimal")
-        self.theme_manager.register_widget(self.check_auto_optimal)
-
-        self.label_pal_preset = ctk.CTkLabel(self.palette_group, text="", anchor="w")
-        self.locale.register(self.label_pal_preset, "sidebar_palette_preset")
-        palette_values = ["Limited", "Original", "Grayscale", "GameBoy", "CGA", "Pico-8", "16-bit (4096 Colors)", "USER CUSTOM"]
-        self.option_palette = ctk.CTkOptionMenu(self.palette_group, values=palette_values, command=self.on_palette_menu_change)
-        self.option_palette.set("Limited")
-        self.theme_manager.register_widget(self.option_palette)
-
+        # Policy switches inside Palette Group (Bottom part)
         self.label_extract_policy = ctk.CTkLabel(self.palette_group, text="", anchor="w", wraplength=280, justify="left")
         self.locale.register(self.label_extract_policy, "sidebar_extract_policy")
         self.extract_policy_switch = ctk.CTkSegmentedButton(self.palette_group, values=[self.locale.get("policy_standard"), self.locale.get("policy_aesthetic")], 
                                                            command=lambda v: self.on_palette_menu_change(self.option_palette.get()))
         self.extract_policy_switch.set(self.locale.get("policy_standard"))
         self.theme_manager.register_widget(self.extract_policy_switch)
+        self.label_extract_policy.pack(pady=(10, 0), padx=15, fill="x")
+        self.extract_policy_switch.pack(pady=5, padx=15, fill="x")
 
         self.label_mapping_policy = ctk.CTkLabel(self.palette_group, text="", anchor="w", wraplength=280, justify="left")
         self.locale.register(self.label_mapping_policy, "sidebar_mapping_policy")
         self.mapping_policy_switch = ctk.CTkSegmentedButton(self.palette_group, values=[self.locale.get("policy_classic"), self.locale.get("policy_perceptual")], command=self.on_param_change)
         self.mapping_policy_switch.set(self.locale.get("policy_classic"))
         self.theme_manager.register_widget(self.mapping_policy_switch)
-
-        # 4. RAP Weights Group
-        self.rap_frame = ctk.CTkFrame(self.param_frame, fg_color="transparent")
-        self.label_rap_header = ctk.CTkLabel(self.rap_frame, text="", anchor="w", font=("Arial", 11, "bold"))
-        self.locale.register(self.label_rap_header, "sidebar_rap_weights")
         
-        self.rap_weights = {}
-        for key, lang_key in [("sat", "weight_sat"), ("con", "weight_con"), ("rar", "weight_rar")]:
-            f = ctk.CTkFrame(self.rap_frame, fg_color="transparent")
-            lbl = ctk.CTkLabel(f, text="", anchor="w", font=("Arial", 10))
-            self.locale.register(lbl, lang_key)
-            val_lbl = ctk.CTkLabel(f, text="0.4" if key=="sat" else "0.3", width=30, font=("Arial", 10))
-            sld = ctk.CTkSlider(self.rap_frame, from_=0, to=1.0, number_of_steps=20, height=16,
-                                command=lambda v, l=val_lbl: [l.configure(text=f"{v:.2f}"), self.on_param_change()])
-            sld.set(0.4 if key=="sat" else 0.3)
-            self.theme_manager.register_widget(sld)
-            bind_ctk_slider_wheel(sld)
-            self.rap_weights[key] = (sld, val_lbl, f, lbl) # Store UI elements for layout
+        self.label_mapping_policy.pack(pady=(10, 0), padx=15, fill="x")
+        self.mapping_policy_switch.pack(pady=5, padx=15, fill="x")
 
         self.btn_custom_pal = ctk.CTkButton(self.palette_group, text="", command=self.open_custom_palette, fg_color="#8e44ad", hover_color="#9b59b6")
         self.locale.register(self.btn_custom_pal, "sidebar_edit_custom_pal")
+        self.btn_custom_pal.pack(pady=5, padx=15, fill="x")
         
         self.check_dither = ctk.CTkCheckBox(self.palette_group, text="", command=self.on_param_change)
         self.locale.register(self.check_dither, "sidebar_dithering")
         self.theme_manager.register_widget(self.check_dither)
+        self.check_dither.pack(pady=5, padx=15, fill="x")
+
+        # 4. RAP Weights Group
+        self.rap_frame = ctk.CTkFrame(self.param_frame, fg_color="transparent")
+        self.rap_frame.grid(row=4, column=0, sticky="ew", pady=5)
+        self.rap_frame.grid_columnconfigure(0, weight=1)
+        self.label_rap_header = ctk.CTkLabel(self.rap_frame, text="", anchor="w", font=("Arial", 11, "bold"))
+        self.locale.register(self.label_rap_header, "sidebar_rap_weights")
+        self.label_rap_header.pack(pady=(5, 0), padx=15, fill="x")
+        
+        self.rap_weights = {}
+        for key, lang_key in [("sat", "weight_sat"), ("con", "weight_con"), ("rar", "weight_rar")]:
+            f = ctk.CTkFrame(self.rap_frame, fg_color="transparent")
+            f.pack(fill="x", pady=2, padx=15)
+            lbl = ctk.CTkLabel(f, text="", anchor="w", font=("Arial", 10))
+            self.locale.register(lbl, lang_key)
+            val_lbl = ctk.CTkLabel(f, text="0.4" if key=="sat" else "0.3", width=30, font=("Arial", 10))
+            lbl.pack(side="left")
+            val_lbl.pack(side="right")
+            
+            sld = ctk.CTkSlider(self.rap_frame, from_=0, to=1.0, number_of_steps=20, height=16,
+                                command=lambda v, l=val_lbl: [l.configure(text=f"{v:.2f}"), self.on_param_change()])
+            sld.set(0.4 if key=="sat" else 0.3)
+            sld.pack(fill="x", padx=15, pady=(0, 5))
+            self.theme_manager.register_widget(sld)
+            bind_ctk_slider_wheel(sld)
+            self.rap_weights[key] = (sld, val_lbl, f, lbl)
 
         # 5. Visual Effects Group
         self.fx_group = ctk.CTkFrame(self.param_frame, fg_color="transparent")
+        self.fx_group.grid(row=5, column=0, sticky="ew", pady=5)
+        self.fx_group.grid_columnconfigure(0, weight=1)
+        
         self.label_vis_fx = ctk.CTkLabel(self.fx_group, text="", anchor="w", font=("Arial", 12, "bold"))
         self.locale.register(self.label_vis_fx, "sidebar_visual_effects")
+        self.label_vis_fx.pack(pady=(10, 0), padx=15, fill="x")
 
         # BG Mode
         self.bg_frame = ctk.CTkFrame(self.fx_group, fg_color="transparent")
+        self.bg_frame.pack(fill="x", pady=2, padx=15)
         self.label_bg_mode = ctk.CTkLabel(self.bg_frame, text="", anchor="w", font=("Arial", 11))
         self.locale.register(self.label_bg_mode, "sidebar_bg_mode")
+        self.label_bg_mode.pack(side="left")
         
         bg_options = [self.locale.get("bg_none"), self.locale.get("bg_classic")]
         if self.dml_supported: bg_options.append(self.locale.get("bg_ai"))
@@ -457,6 +464,7 @@ class PixelApp(ctk.CTk):
 
         self.option_bg_mode = ctk.CTkOptionMenu(self.fx_group, values=bg_options, command=self.on_bg_mode_change)
         self.option_bg_mode.set(self.locale.get("bg_none"))
+        self.option_bg_mode.pack(pady=2, padx=15, fill="x")
         self.theme_manager.register_widget(self.option_bg_mode)
 
         self.btn_clear_seeds = ctk.CTkButton(self.fx_group, text="", height=24, fg_color="#7f8c8d", command=self.clear_bg_seeds)
@@ -466,58 +474,87 @@ class PixelApp(ctk.CTk):
         self.check_outline = ctk.CTkCheckBox(self.fx_group, text="", command=self.on_param_change)
         self.locale.register(self.check_outline, "sidebar_outline")
         self.theme_manager.register_widget(self.check_outline)
+        self.check_outline.pack(pady=5, padx=15, fill="x")
 
         # Edge Enhancement
         self.edge_group = ctk.CTkFrame(self.fx_group, fg_color="transparent")
+        self.edge_group.pack(fill="x", pady=5)
         self.check_edge_enhance = ctk.CTkCheckBox(self.edge_group, text="", command=self.on_edge_enhance_toggle)
         self.locale.register(self.check_edge_enhance, "sidebar_edge_enhance")
+        self.check_edge_enhance.pack(fill="x", padx=15)
         self.theme_manager.register_widget(self.check_edge_enhance)
 
         self.edge_controls_container = ctk.CTkFrame(self.edge_group, fg_color="transparent")
         edge_header = ctk.CTkFrame(self.edge_controls_container, fg_color="transparent")
+        edge_header.pack(fill="x", pady=(2, 0))
         self.label_edge_sens_header = ctk.CTkLabel(edge_header, text="", anchor="w", font=("Arial", 10))
         self.locale.register(self.label_edge_sens_header, "sidebar_edge_sens")
         self.label_edge_sens = ctk.CTkLabel(edge_header, text="1.0", width=40, anchor="e", font=("Arial", 10))
+        self.label_edge_sens_header.pack(side="left")
+        self.label_edge_sens.pack(side="right")
+        
         self.slider_edge_sens = ctk.CTkSlider(self.edge_controls_container, from_=0, to=10.0, number_of_steps=100, height=16, command=self.update_edge_sens_label)
         self.slider_edge_sens.set(1.0)
+        self.slider_edge_sens.pack(fill="x", pady=(0, 5))
         self.theme_manager.register_widget(self.slider_edge_sens)
 
         # Grain Effect
         self.grain_group = ctk.CTkFrame(self.fx_group, fg_color="transparent")
+        self.grain_group.pack(fill="x", pady=5)
         self.check_grain = ctk.CTkCheckBox(self.grain_group, text="", command=self.on_grain_toggle)
         self.locale.register(self.check_grain, "sidebar_grain")
+        self.check_grain.pack(fill="x", padx=15)
         self.theme_manager.register_widget(self.check_grain)
         
         self.grain_controls_container = ctk.CTkFrame(self.grain_group, fg_color="transparent")
         grain_header = ctk.CTkFrame(self.grain_controls_container, fg_color="transparent")
+        grain_header.pack(fill="x", pady=(2, 0))
         self.label_grain_amt = ctk.CTkLabel(grain_header, text="", anchor="w", font=("Arial", 10))
         self.locale.register(self.label_grain_amt, "sidebar_grain_amt")
         self.label_grain_val = ctk.CTkLabel(grain_header, text="15", width=40, anchor="e", font=("Arial", 10))
+        self.label_grain_amt.pack(side="left")
+        self.label_grain_val.pack(side="right")
+        
         self.slider_grain = ctk.CTkSlider(self.grain_controls_container, from_=0, to=50, number_of_steps=50, height=16, command=self.update_grain_label)
         self.slider_grain.set(15)
+        self.slider_grain.pack(fill="x", pady=(0, 5))
         self.theme_manager.register_widget(self.slider_grain)
 
         # 6. Global Setup & Themes
         self.setup_group = ctk.CTkFrame(self.param_frame, fg_color="transparent")
+        self.setup_group.grid(row=6, column=0, sticky="ew", pady=10)
+        self.setup_group.grid_columnconfigure(0, weight=1)
+        
         self.label_downsample = ctk.CTkLabel(self.setup_group, text="", anchor="w", wraplength=280, justify="left")
         self.locale.register(self.label_downsample, "sidebar_downsample")
+        self.label_downsample.pack(pady=(5, 0), padx=15, fill="x")
         self.option_downsample = ctk.CTkOptionMenu(self.setup_group, values=[self.locale.get("opt_standard"), self.locale.get("opt_kmeans")], command=self.on_param_change)
         self.option_downsample.set(self.locale.get("opt_standard"))
+        self.option_downsample.pack(pady=5, padx=15, fill="x")
         self.theme_manager.register_widget(self.option_downsample)
 
         self.label_presets_header = ctk.CTkLabel(self.setup_group, text="", anchor="w", font=("Arial", 12, "bold"))
         self.locale.register(self.label_presets_header, "sidebar_presets")
+        self.label_presets_header.pack(pady=(15, 0), padx=15, fill="x")
         self.preset_frame_inner = ctk.CTkFrame(self.setup_group, fg_color="transparent")
+        self.preset_frame_inner.pack(fill="x", pady=5)
         self.option_presets = ctk.CTkOptionMenu(self.preset_frame_inner, values=[self.locale.get("preset_default")], command=self.apply_preset)
         self.option_presets.set(self.locale.get("preset_default"))
+        self.option_presets.pack(side="left", padx=(15, 5), fill="x", expand=True)
         self.theme_manager.register_widget(self.option_presets)
         self.btn_save_preset = ctk.CTkButton(self.preset_frame_inner, text="💾", width=30, command=self.save_preset_dialog)
+        self.btn_save_preset.pack(side="right", padx=(0, 15))
         self.theme_manager.register_widget(self.btn_save_preset)
 
         self.label_theme_header = ctk.CTkLabel(self.setup_group, text="", anchor="w", font=("Arial", 12, "bold"))
         self.locale.register(self.label_theme_header, "sidebar_theme")
+        self.label_theme_header.pack(pady=(5, 0), padx=15, fill="x")
         self.option_theme = ctk.CTkOptionMenu(self.setup_group, values=self.theme_manager.get_available_themes(), command=self.change_theme)
         self.option_theme.set("Default Dark")
+        self.option_theme.pack(pady=5, padx=15, fill="x")
+        self.btn_custom_accent = ctk.CTkButton(self.setup_group, text="", command=self.pick_custom_accent)
+        self.locale.register(self.btn_custom_accent, "btn_accent_picker")
+        self.btn_custom_accent.pack(pady=2, padx=15, fill="x")
         self.theme_manager.register_widget(self.option_theme)
         
         self.btn_custom_accent = ctk.CTkButton(self.setup_group, text="🎨 Accent Color", height=24, command=self.pick_custom_accent)
@@ -773,13 +810,6 @@ class PixelApp(ctk.CTk):
             self.btn_save.configure(state="normal")
         except Exception as e: print(f"Error project load: {e}")
 
-    def on_auto_optimal_toggle(self):
-        """Handles the Auto Optimal checkbox toggle."""
-        self.on_palette_menu_change(self.option_palette.get())
-
-    def update_auto_optimal_visibility(self):
-        # Deprecated: functionality moved to on_palette_menu_change
-        pass
 
     def on_palette_menu_change(self, value):
         """Handler for palette menu selection."""
@@ -825,7 +855,10 @@ class PixelApp(ctk.CTk):
             self.on_param_change()
 
     def update_edge_sens_label(self, value): self.label_edge_sens.configure(text=f"{float(value):.1f}"); self.on_param_change()
-    def on_edge_enhance_toggle(self): self.update_edge_controls_state(); self.on_param_change()
+    def on_edge_enhance_toggle(self):
+        self.update_edge_controls_state()
+        self._regrid_sidebar() # Real-time margin cleanup
+        self.on_param_change()
     def update_edge_controls_state(self):
         if self.check_edge_enhance.get(): 
             self.slider_edge_sens.configure(state="normal", progress_color=self.theme_manager.get_current_accent())
@@ -834,8 +867,14 @@ class PixelApp(ctk.CTk):
             self.slider_edge_sens.configure(state="disabled", progress_color="gray")
             self.label_edge_sens.configure(text_color="gray")
 
-    def update_grain_label(self, value): self.label_grain_val.configure(text=f"{int(value)}"); self.on_param_change()
-    def on_grain_toggle(self): self.update_grain_controls_state(); self.on_param_change()
+    def update_grain_label(self, value): 
+        self.label_grain_val.configure(text=f"{int(value)}")
+        self.on_param_change()
+
+    def on_grain_toggle(self):
+        self.update_grain_controls_state()
+        self._regrid_sidebar() # Real-time margin cleanup
+        self.on_param_change()
     def update_grain_controls_state(self):
         if self.check_grain.get():
             self.slider_grain.configure(state="normal", progress_color=self.theme_manager.get_current_accent())
@@ -886,40 +925,60 @@ class PixelApp(ctk.CTk):
                 self.fg_seeds.append((rel_x, rel_y))
             self.on_param_change()
 
-    def on_setting_mode_change(self, value):
-        mode = self._get_logical(value, "setting_mode")
+    def set_ui_mode(self, mode):
+        """
+        Orchestrates transition between Global and Individual settings modes.
+        Used as a Single Source of Truth for sync between Sidebar and Inventory.
+        """
+        valid_modes = ["Global", "Individual"]
+        if mode not in valid_modes: return
+        
+        # 1. Logic Transition & State Capturing
         if mode == "Global":
-            # Individual -> Global: Capture current UI state as the new global temporary state
             self.global_params = self.capture_ui_state()
             self.status_label.configure(text="🌐 Global Mode: Temporary state active")
             
-            # Task 52.3: If current item is excluded, switch to first active or clear
+            # Auto-selection logic for excluded items
             if self.current_inventory_id is not None:
                 e = self.image_manager.get_image(self.current_inventory_id)
                 if e and not e.get("is_active_global", True):
                     all_entries = self.image_manager.get_all()
                     next_active = next((item for item in all_entries if item.get("is_active_global", True)), None)
                     if next_active:
-                        self.select_inventory_image(next_active["id"])
+                        self.current_inventory_id = next_active["id"]
                     else:
-                        self.clear_preview()
+                        self.current_inventory_id = None
         else:
-            # Global -> Individual: Apply current global settings ONLY to active items
+            # Global -> Individual: Apply current global settings to active items (Commit)
             import copy
             all_entries = self.image_manager.get_all()
             for entry in all_entries:
                 if entry.get("is_active_global", True):
                     entry["params"] = copy.deepcopy(self.global_params)
-                    # Update visibility for each modified item
                     self.update_reset_button_visibility(entry["id"], force_check=True)
             
-            self.status_label.configure(text="📁 Individual Mode: Settings applied to active group")
-            
-        self.update_inventory_appearance()
-        self.after(2000, lambda: self.status_label.configure(text=""))
-        self.on_param_change()
+            self.status_label.configure(text="👤 Individual Mode: Global settings applied to group")
 
-    def _get_logical(self, val, cat):
+        # 2. Update physical switch state
+        display_val = self._get_display(mode, "setting_mode")
+        if self.setting_mode_switch.get() != display_val:
+            self.setting_mode_switch.set(display_val)
+
+        # 3. Synchronize UI Components
+        self._regrid_sidebar()
+        self.update_inventory_appearance()
+        
+        # 4. Trigger reprocessing based on new mode
+        if self.current_inventory_id is not None:
+            self.select_inventory_image(self.current_inventory_id)
+        elif self.original_image_path:
+            self.process_image()
+
+    def on_setting_mode_change(self, value):
+        mode = self._get_logical(value, "setting_mode")
+        self.set_ui_mode(mode)
+
+    def _get_logical(self, display_val, category):
         m = {
             "save_mode": {self.locale.get("save_pixelate"): "Pixelate", self.locale.get("save_style"): "Style Only"},
             "downsample": {self.locale.get("opt_standard"): "Standard", self.locale.get("opt_kmeans"): "K-Means"},
@@ -933,7 +992,7 @@ class PixelApp(ctk.CTk):
                 self.locale.get("bg_interactive"): "Interactive"
             }
         }
-        return m.get(cat, {}).get(val, val)
+        return m.get(category, {}).get(display_val, display_val)
 
     def _get_display(self, val, cat):
         m = {
@@ -1145,10 +1204,20 @@ class PixelApp(ctk.CTk):
             params = self.capture_ui_state()
 
         # 2. Change Detection Optimization
-        # If parameters haven't changed for this specific entry/source, skip processing
         state_key = (self.current_inventory_id if self.current_inventory_id is not None else source_data)
         if self.last_processed_params.get(state_key) == params:
-            return
+            # OPTIMIZATION: If params matched, check if we have a valid cached result to display
+            if self.current_inventory_id is not None:
+                e = self.image_manager.get_image(self.current_inventory_id)
+                if e and e.get("processed_image") is not None:
+                    # Restore from inventory cache instead of re-processing
+                    self.raw_pixel_image = e["processed_image"]
+                    self.preview_image = e["preview_image"]
+                    self.display_image()
+                    self._update_secondary_ui(e["processed_image"])
+                    return
+            else:
+                return # For non-inventory single image, just skip if params match
 
         if self._is_processing:
             self._pending_reprocess = True
@@ -1257,6 +1326,15 @@ class PixelApp(ctk.CTk):
 
         threading.Thread(target=run, daemon=True).start()
 
+    def _update_secondary_ui(self, proc):
+        """Updates palette inspector and resolution label without re-rendering."""
+        try:
+            clrs = self.extract_used_colors(proc)
+            self.palette_inspector.update_colors(clrs)
+            rw, rh = proc.size if self._get_logical(self.mode_switch.get(), "save_mode") == "Pixelate" else self.original_size
+            self.res_label.configure(text=f"{rw} x {rh}")
+        except: pass
+
     def _on_processing_complete(self, proc, prev=None):
         self._is_processing = False
         
@@ -1269,14 +1347,17 @@ class PixelApp(ctk.CTk):
         
         if proc:
             self.raw_pixel_image, self.preview_image = proc, prev
+            
+            # Save to inventory cache if applicable
+            if self.current_inventory_id is not None:
+                e = self.image_manager.get_image(self.current_inventory_id)
+                if e:
+                    e["processed_image"] = proc
+                    e["preview_image"] = prev
+            
             self.display_image()
             self.btn_save.configure(state="normal")
-            try:
-                clrs = self.extract_used_colors(proc)
-                self.palette_inspector.update_colors(clrs)
-                rw, rh = proc.size if self._get_logical(self.mode_switch.get(), "save_mode") == "Pixelate" else self.original_size
-                self.res_label.configure(text=f"{rw} x {rh}")
-            except: pass
+            self._update_secondary_ui(proc)
         else:
             if self.image_manager.count() == 0:
                 self.clear_preview()
@@ -1545,22 +1626,24 @@ class PixelApp(ctk.CTk):
         defaults = self.get_hardcoded_defaults()
 
         if mode == "Global":
-            # 1. Apply current global (temporary) settings to ALL images first
+            # 1. Apply current global settings to ALL images to preserve state
             all_entries = self.image_manager.get_all()
             for entry in all_entries:
                 entry["params"] = copy.deepcopy(self.global_params)
             
-            # 2. THEN, override the target image with pure defaults
+            # 2. Reset specific image
             self.image_manager.update_image_params(iid, copy.deepcopy(defaults))
             
-            # 3. Force switch to Individual mode UI
-            self.setting_mode_switch.set(self.locale.get("mode_individual"))
+            # 3. Use unified orchestrator to switch mode and sync UI
+            self.current_inventory_id = iid
+            self.set_ui_mode("Individual")
         else:
-            # Already in Individual mode, just reset the target image
+            # Already Individual, just reset
             self.image_manager.update_image_params(iid, copy.deepcopy(defaults))
+            self.current_inventory_id = iid
+            self.update_inventory_appearance()
 
-        # 4. Show the changes in UI and preview
-        self.current_inventory_id = iid
+        # 4. Apply visuals
         self.restore_ui_state(defaults)
         
         # 5. Hide the reset button since it's now back to defaults
