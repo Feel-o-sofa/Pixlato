@@ -207,14 +207,10 @@ def downsample_kmeans_torch(img, pixel_size, out_w, out_h):
 # AI Background Removal
 # ------------------------------------------------------------------------------
 
-# Global session cache for rembg
-_REMBG_SESSION = None
-
-
 def is_directml_supported():
     """
     Checks if DirectML (universal Windows GPU acceleration) is supported.
-    
+
     Returns:
         bool: True if DmlExecutionProvider is available
     """
@@ -226,66 +222,10 @@ def is_directml_supported():
         return False
 
 
-def remove_background_ai_torch(img):
-    """
-    [DEPRECATED — Fan-in: 0]
-    This function is not called anywhere in the codebase.
-    Background removal via rembg is handled entirely by
-    ``processor.py::remove_background_ai()``, which already
-    routes ONNX providers through ``EngineDispatcher._build_rembg_providers()``.
-
-    Scheduled for removal in Phase 60 (session consolidation).
-    Do NOT add new callers here — use ``processor.remove_background_ai()`` instead.
-
-    ---
-
-    Uses rembg (AI model) to automatically extract the main subject.
-
-    Provider priority delegated to EngineDispatcher._build_rembg_providers:
-      CUDA (NVIDIA) > DirectML (AMD/Intel/NVIDIA Windows) > CPU
-
-    Includes post-processing for clean pixel art edges:
-    - Alpha binarization (threshold at 128)
-    - Median filter for noise cleanup
-
-    Args:
-        img: PIL Image
-
-    Returns:
-        PIL Image (RGBA) with transparent background
-    """
-    global _REMBG_SESSION
-    try:
-        from rembg import remove, new_session
-        from core.processor import EngineDispatcher
-
-        # Initialize session once; provider priority centralized in EngineDispatcher
-        if _REMBG_SESSION is None:
-            target_providers = EngineDispatcher._build_rembg_providers()
-            _REMBG_SESSION = new_session(model_name="silueta", providers=target_providers)
-            print(f"[Pixlato] rembg session (torch) initialized with providers: {target_providers}")
-
-        result = remove(img, session=_REMBG_SESSION)
-
-        # Post-process: Alpha binarization for clean pixel art edges
-        if result.mode == "RGBA":
-            r, g, b, a = result.split()
-            # Threshold: <128 -> 0, >=128 -> 255
-            a = a.point(lambda p: 255 if p >= 128 else 0)
-
-            # Matte cleanup (remove isolated noise)
-            a = a.filter(ImageFilter.MedianFilter(size=3))
-
-            result = Image.merge("RGBA", (r, g, b, a))
-
-        return result
-
-    except ImportError as e:
-        print(f"[Pixlato] rembg not available: {e}")
-        return img
-    except Exception as e:
-        print(f"[Pixlato] AI background removal error: {e}")
-        return img
+# NOTE: remove_background_ai_torch() was removed in Phase 60.
+# AI background removal is handled exclusively by processor.py::remove_background_ai(),
+# which routes ONNX providers through EngineDispatcher._build_rembg_providers().
+# Use processor.remove_background_ai() for all AI background removal needs.
 
 
 def remove_background_interactive_torch(img, bg_seeds, fg_seeds=None):

@@ -10,10 +10,10 @@ import time
 
 # Import core logic
 from core.common import TaskManager, OperationCancelled, debug_log
-from core.processor import (EngineDispatcher, pixelate_image, upscale_for_preview, add_outline, 
-                            remove_background, apply_grain_effect, remove_background_ai, 
+from core.processor import (EngineDispatcher, pixelate_image, upscale_for_preview, add_outline,
+                            remove_background, apply_grain_effect, remove_background_ai,
                             remove_background_interactive, is_directml_supported,
-                            normalize_image_geometry)
+                            normalize_image_geometry, dispatch_background_removal)
 from core.palette import apply_palette_unified
 from core.project_manager import ProjectManager
 from core.gif_processor import process_gif
@@ -1251,26 +1251,24 @@ class PixelApp(ctk.CTk):
                 current_bg_params = {
                     "bg_mode": params.get("bg_mode", "None"),
                     "bg_seeds": params.get("bg_seeds", []),
-                    "foreground_seeds": params.get("foreground_seeds", []) # Fixed name
+                    "fg_seeds": params.get("fg_seeds", [])  # Bug fix: was "foreground_seeds" (never matched params key)
                 }
-                
+
                 entry = self.image_manager.get_image(self.current_inventory_id) if self.current_inventory_id is not None else None
-                
+
                 if entry and entry["bg_processed_image"] is not None and entry["last_bg_params"] == current_bg_params:
                     # Use Cache
                     img_no_bg = entry["bg_processed_image"]
                 else:
                     # Execute Background Removal (Heavy Task)
                     img_no_bg = self.plugin_engine.execute_hook("PRE_PROCESS", img, params)
-                    
-                    bg_m = current_bg_params["bg_mode"]
-                    if bg_m == "AI Auto":
-                        img_no_bg = remove_background_ai(img_no_bg)
-                    elif bg_m == "Interactive" and current_bg_params["bg_seeds"]:
-                        img_no_bg = remove_background_interactive(img_no_bg, current_bg_params["bg_seeds"], current_bg_params["foreground_seeds"])
-                    elif bg_m == "Classic":
-                        img_no_bg = remove_background(img_no_bg, tolerance=40)
-                    
+                    img_no_bg = dispatch_background_removal(
+                        img_no_bg,
+                        current_bg_params["bg_mode"],
+                        current_bg_params["bg_seeds"],
+                        current_bg_params["fg_seeds"]
+                    )
+
                     # Update Cache
                     if entry:
                         entry["bg_processed_image"] = img_no_bg
@@ -1730,21 +1728,18 @@ class PixelApp(ctk.CTk):
                 "bg_seeds": p.get("bg_seeds", []),
                 "fg_seeds": p.get("fg_seeds", [])
             }
-            
+
             if e.get("bg_processed_image") is not None and e.get("last_bg_params") == current_bg_params:
                 img = e["bg_processed_image"]
             else:
                 img = e["pil_image"].convert("RGBA")
-                bg_m = current_bg_params["bg_mode"]
-                if bg_m == "AI Auto":
-                    from core.processor import remove_background_ai
-                    img = remove_background_ai(img)
-                elif bg_m == "Interactive" and current_bg_params["bg_seeds"]:
-                    from core.processor import remove_background_interactive
-                    img = remove_background_interactive(img, current_bg_params["bg_seeds"], current_bg_params["fg_seeds"])
-                elif bg_m == "Classic":
-                    img = remove_background(img, tolerance=40)
-                
+                img = dispatch_background_removal(
+                    img,
+                    current_bg_params["bg_mode"],
+                    current_bg_params["bg_seeds"],
+                    current_bg_params["fg_seeds"]
+                )
+
                 e["bg_processed_image"] = img
                 e["last_bg_params"] = current_bg_params.copy()
                 

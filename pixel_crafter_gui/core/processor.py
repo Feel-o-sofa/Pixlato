@@ -21,20 +21,22 @@ class EngineDispatcher:
     Manages backend selection for image processing operations.
     Supports three modes: 'auto', 'cpu', 'gpu'
     """
-    _mode = "auto"  # Default: auto-detect best backend
+    _mode = "auto"          # Default: auto-detect best backend
     _torch_available = None  # Cached availability check
-    _has_cuda = None        # Cached CUDA check
-    
+    _has_cuda = None         # Cached CUDA check
+    _providers_cache = None  # Cached result of _build_rembg_providers()
+
     @classmethod
     def set_mode(cls, mode):
         """
         Sets the processing mode.
-        
+
         Args:
             mode: 'auto' (default), 'cpu' (force NumPy), or 'gpu' (force PyTorch)
         """
         if mode in ["auto", "cpu", "gpu"]:
             cls._mode = mode
+            cls._providers_cache = None  # Invalidate provider cache on mode change
             debug_log(f"[Pixlato] Engine mode set to: {mode}")
     
     @classmethod
@@ -100,11 +102,17 @@ class EngineDispatcher:
         Returns:
             list[str]: Ordered provider list ready to pass to rembg.new_session().
         """
+        # Return cached result if available (invalidated by set_mode())
+        if cls._providers_cache is not None:
+            return cls._providers_cache
+
         # Respect explicit CPU mode: bypass all GPU providers
         if cls._mode == "cpu":
             cls._has_cuda = False
             debug_log("[Pixlato] rembg: CPU mode forced — skipping GPU provider probe.")
-            return ["CPUExecutionProvider"]
+            result = ["CPUExecutionProvider"]
+            cls._providers_cache = result
+            return result
 
         try:
             import onnxruntime as ort
@@ -112,7 +120,9 @@ class EngineDispatcher:
         except ImportError:
             debug_log("[Pixlato] onnxruntime not found; falling back to CPU provider list.")
             cls._has_cuda = False
-            return ["CPUExecutionProvider"]
+            result = ["CPUExecutionProvider"]
+            cls._providers_cache = result
+            return result
 
         ordered = []
 
@@ -131,6 +141,7 @@ class EngineDispatcher:
             ordered.append("CPUExecutionProvider")
 
         debug_log(f"[Pixlato] rembg provider order: {ordered}")
+        cls._providers_cache = ordered
         return ordered
 
 def enhance_internal_edges(img, sensitivity=1.0):
@@ -442,6 +453,36 @@ def remove_background_interactive(img, bg_seeds, fg_seeds=None):
     except Exception as e:
         print(f"Interactive Background Removal Error: {e}")
         return img
+
+
+def dispatch_background_removal(img, bg_mode, bg_seeds, fg_seeds=None):
+    """
+    Single entry point for all background removal modes.
+
+    Eliminates duplicated bg_mode dispatch blocks that previously existed
+    in both the single-image pipeline (PixelApp.run) and the batch pipeline
+    (process_frame_layered). All callers should use this function instead of
+    branching on bg_mode directly.
+
+    Args:
+        img:      PIL Image (RGBA)
+        bg_mode:  str — one of "AI Auto", "Interactive", "Classic", "None"
+        bg_seeds: list of (x, y) background seed coordinates (for Interactive mode)
+        fg_seeds: list of (x, y) foreground seed coordinates (for Interactive mode, optional)
+
+    Returns:
+        PIL Image (RGBA) with background removed/modified, or the original
+        image unchanged if bg_mode is "None" or unrecognised.
+    """
+    if bg_mode == "AI Auto":
+        return remove_background_ai(img)
+    elif bg_mode == "Interactive" and bg_seeds:
+        return remove_background_interactive(img, bg_seeds, fg_seeds)
+    elif bg_mode == "Classic":
+        return remove_background(img, tolerance=40)
+    # "None" or any unrecognised value: pass through unchanged
+    return img
+
 
 def apply_grain_effect(img, intensity=15):
     """
