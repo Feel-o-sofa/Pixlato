@@ -60,25 +60,68 @@ class EngineDispatcher:
     def get_backend(cls):
         """
         Determines which backend to use based on mode and availability.
-        
+
         Returns:
             str: 'gpu' or 'cpu'
         """
         if cls._mode == "cpu":
             return "cpu"
-        
+
         if cls._mode == "gpu":
             if cls.is_torch_available():
                 return "gpu"
             else:
                 print("[Pixlato] GPU mode requested but PyTorch unavailable. Using CPU.")
                 return "cpu"
-        
+
         # Auto mode: use GPU if available
         if cls._mode == "auto":
             return "gpu" if cls.is_torch_available() else "cpu"
-        
+
         return "cpu"
+
+    @classmethod
+    def _build_rembg_providers(cls):
+        """
+        Single source of truth for rembg/ONNX provider priority.
+
+        Priority order:
+          1. CUDAExecutionProvider  — NVIDIA GPU, lowest latency
+          2. DmlExecutionProvider   — DirectML (AMD/Intel/NVIDIA, Windows universal)
+          3. CPUExecutionProvider   — CPU fallback, always present
+
+        Also populates cls._has_cuda so other methods can query CUDA availability
+        without re-importing onnxruntime.
+
+        Returns:
+            list[str]: Ordered provider list ready to pass to rembg.new_session().
+        """
+        try:
+            import onnxruntime as ort
+            available = ort.get_available_providers()
+        except ImportError:
+            debug_log("[Pixlato] onnxruntime not found; falling back to CPU provider list.")
+            cls._has_cuda = False
+            return ["CPUExecutionProvider"]
+
+        ordered = []
+
+        if "CUDAExecutionProvider" in available:
+            ordered.append("CUDAExecutionProvider")
+            cls._has_cuda = True
+            debug_log("[Pixlato] rembg: CUDA provider available — using CUDAExecutionProvider.")
+        else:
+            cls._has_cuda = False
+
+        if "DmlExecutionProvider" in available:
+            ordered.append("DmlExecutionProvider")
+            debug_log("[Pixlato] rembg: DirectML provider available — using DmlExecutionProvider.")
+
+        if "CPUExecutionProvider" in available:
+            ordered.append("CPUExecutionProvider")
+
+        debug_log(f"[Pixlato] rembg provider order: {ordered}")
+        return ordered
 
 def enhance_internal_edges(img, sensitivity=1.0):
     """
@@ -304,42 +347,34 @@ REMBG_SESSION = None
 def remove_background_ai(img):
     """
     Uses rembg (AI model) to automatically extract the main subject.
-    Utilizes DirectML for universal Windows GPU acceleration (AMD, Intel, NVIDIA).
+
+    Provider priority (handled by EngineDispatcher._build_rembg_providers):
+      CUDA (NVIDIA) > DirectML (AMD/Intel/NVIDIA Windows) > CPU
     """
     global REMBG_SESSION
     try:
         from rembg import remove, new_session
-        import onnxruntime as ort
-        
-        # Initialize session if it doesn't exist
+
+        # Initialize session once; provider priority centralized in EngineDispatcher
         if REMBG_SESSION is None:
-            providers = ort.get_available_providers()
-            target_providers = []
-            
-            # Prefer DirectML for universal acceleration
-            if 'DmlExecutionProvider' in providers:
-                target_providers.append('DmlExecutionProvider')
-            if 'CPUExecutionProvider' in providers:
-                target_providers.append('CPUExecutionProvider')
-            
-            # Use u2net (standard)
-            REMBG_SESSION = new_session(model_name="u2net", providers=target_providers)
-            
+            target_providers = EngineDispatcher._build_rembg_providers()
+            REMBG_SESSION = new_session(model_name="silueta", providers=target_providers)
+
         result = remove(img, session=REMBG_SESSION)
-        
+
         # Post-process: Alpha Thresholding/Binarization
         # Pixel Art requires clean edges. Semi-transparent residue causes dirty outlines.
         if result.mode == "RGBA":
             r, g, b, a = result.split()
             # Threshold: Values < 128 become 0, >= 128 become 255
             a = a.point(lambda p: 255 if p >= 128 else 0)
-            
-            # Optional: Matte Cleanup (Remove small isolated noise pixels)
+
+            # Matte Cleanup: remove small isolated noise pixels
             from PIL import ImageFilter
             a = a.filter(ImageFilter.MedianFilter(size=3))
-            
+
             result = Image.merge("RGBA", (r, g, b, a))
-            
+
         return result
     except Exception as e:
         print(f"AI Background Removal Error: {e}")
@@ -350,35 +385,44 @@ def remove_background_interactive(img, bg_seeds, fg_seeds=None):
     Uses OpenCV GrabCut to interactively remove background based on user points.
     bg_seeds: list of (x, y) coordinates for background
     fg_seeds: list of (x, y) coordinates for foreground (optional)
+
+    When GPU backend is active, routes through processor_torch for architectural
+    consistency. Note: GrabCut itself is a CPU-bound algorithm regardless of backend;
+    the routing ensures all processing paths flow through the same module under GPU mode.
     """
+    if EngineDispatcher.get_backend() == "gpu":
+        try:
+            from core.processor_torch import remove_background_interactive_torch
+            return remove_background_interactive_torch(img, bg_seeds, fg_seeds)
+        except ImportError:
+            debug_log("[Pixlato] processor_torch unavailable; falling back to CPU GrabCut.")
+
+    # CPU path: direct OpenCV GrabCut
     try:
         import cv2
-        # Convert PIL to CV2 format (RGB)
         img_np = np.array(img.convert("RGB"))
         img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
-        
+
         mask = np.zeros(img_cv.shape[:2], np.uint8)
-        mask.fill(cv2.GC_PR_FGD) # Default to probably foreground
-        
-        # Apply seeds
+        mask.fill(cv2.GC_PR_FGD)  # Default to probably foreground
+
         for x, y in bg_seeds:
             if 0 <= x < img.width and 0 <= y < img.height:
                 cv2.circle(mask, (int(x), int(y)), 5, cv2.GC_BGD, -1)
-        
+
         if fg_seeds:
             for x, y in fg_seeds:
                 if 0 <= x < img.width and 0 <= y < img.height:
                     cv2.circle(mask, (int(x), int(y)), 5, cv2.GC_FGD, -1)
-        
-        # GrabCut variables
+
         bgdModel = np.zeros((1, 65), np.float64)
         fgdModel = np.zeros((1, 65), np.float64)
-        
+
         if bg_seeds:
             cv2.grabCut(img_cv, mask, None, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_MASK)
         else:
             return img
-            
+
         mask2 = np.where((mask == 2) | (mask == 0), 0, 1).astype('uint8')
         res_np = np.array(img.convert("RGBA"))
         res_np[..., 3] = mask2 * 255
