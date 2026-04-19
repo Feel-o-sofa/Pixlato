@@ -228,6 +228,17 @@ def is_directml_supported():
 
 def remove_background_ai_torch(img):
     """
+    [DEPRECATED — Fan-in: 0]
+    This function is not called anywhere in the codebase.
+    Background removal via rembg is handled entirely by
+    ``processor.py::remove_background_ai()``, which already
+    routes ONNX providers through ``EngineDispatcher._build_rembg_providers()``.
+
+    Scheduled for removal in Phase 60 (session consolidation).
+    Do NOT add new callers here — use ``processor.remove_background_ai()`` instead.
+
+    ---
+
     Uses rembg (AI model) to automatically extract the main subject.
 
     Provider priority delegated to EngineDispatcher._build_rembg_providers:

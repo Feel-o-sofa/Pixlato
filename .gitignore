@@ -157,3 +157,6 @@ TEST_ENV/
 # Claude Code tooling
 .claude/
 .cynapx-config
+
+# Editor backup files
+*.bak

@@ -3,10 +3,12 @@ import os
 import random
 import math
 import builtins
-import torch
 import numpy as np
 from abc import ABC, abstractmethod
 from PIL import Image, ImageDraw, ImageFont
+
+# torch is imported lazily in _load_plugin() and execute_hook() to avoid
+# a hard startup dependency on PyTorch when no GPU plugins are loaded.
 
 class BasePlugin(ABC):
     """
@@ -64,13 +66,16 @@ class PluginEngine:
                 code = f.read()
 
             # --- Hardened Sandbox Policy ---
-            # 1. Start with a safe subset of builtins
+            # 1. Start with a safe subset of builtins.
+            # NOTE: '__import__' is intentionally excluded — allowing it would give plugins
+            # unrestricted access to os, subprocess, socket, etc., completely defeating the
+            # sandbox. All necessary modules (torch, np, Image, ...) are injected via safe_globals.
             safe_builtins = {}
             allowed_builtins = [
-                'print', 'range', 'len', 'int', 'float', 'str', 'list', 'dict', 'tuple', 
+                'print', 'range', 'len', 'int', 'float', 'str', 'list', 'dict', 'tuple',
                 'abs', 'min', 'max', 'sum', 'isinstance', 'getattr', 'setattr', 'hasattr',
                 'Exception', 'ValueError', 'TypeError', 'bool', 'any', 'all', 'enumerate',
-                'zip', 'sorted', 'reversed', '__build_class__', '__import__'
+                'zip', 'sorted', 'reversed', '__build_class__'
             ]
             for b in allowed_builtins:
                 if hasattr(builtins, b):
@@ -78,6 +83,13 @@ class PluginEngine:
 
             # 2. Define plugin-level globals
             from core.context import ProcessingContext
+            # Lazily inject torch so a missing PyTorch installation doesn't
+            # prevent non-GPU plugins from loading.
+            try:
+                import torch as _torch
+                _torch_module = _torch
+            except ImportError:
+                _torch_module = None
             safe_globals = {
                 "__builtins__": safe_builtins,
                 "__name__": f"plugins.{plugin_id}",
@@ -89,7 +101,7 @@ class PluginEngine:
                 "ImageFont": ImageFont,
                 "random": random,
                 "math": math,
-                "torch": torch,
+                "torch": _torch_module,
                 "np": np
             }
             

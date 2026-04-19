@@ -269,7 +269,8 @@ class PixelApp(ctk.CTk):
         try:
             self.scroll_sidebar._parent_canvas.configure(highlightthickness=0)
             self.scroll_sidebar._content_frame.configure(padx=0, pady=0)
-        except: pass
+        except Exception as e:
+            debug_log(f"[UI] CTkScrollableFrame internal widget access failed: {e}")
         
         self.param_frame = self.scroll_sidebar
         self._create_sidebar_groups()
@@ -1237,8 +1238,12 @@ class PixelApp(ctk.CTk):
                     img = Image.open(source_data).convert("RGBA")
                 else:
                     img = source_data.convert("RGBA")
-                
-                self.original_size = img.size
+
+                # Use a thread-local variable to avoid a race condition:
+                # self.original_size is read by the main thread (_update_secondary_ui),
+                # so writing it from a background thread without a lock is unsafe.
+                # The computed size is passed to the main thread via after() callback instead.
+                original_size = img.size
                 TaskManager.check(current_task_id)
                 
                 # 2. Check Background Removal Cache
@@ -1313,9 +1318,11 @@ class PixelApp(ctk.CTk):
                 proc = self.plugin_engine.execute_hook("FINAL_IMAGE", proc, params)
                 
                 TaskManager.check(current_task_id)
-                prev = upscale_for_preview(proc, self.original_size)
-                
-                self.after(0, self._on_processing_complete, proc, prev)
+                prev = upscale_for_preview(proc, original_size)
+
+                # Pass original_size to the main thread via callback — never write
+                # self.original_size from a background thread.
+                self.after(0, self._on_processing_complete, proc, prev, original_size)
                 
             except OperationCancelled:
                 debug_log(f"[Engine] Task {current_task_id} cancelled.")
@@ -1333,10 +1340,14 @@ class PixelApp(ctk.CTk):
             self.palette_inspector.update_colors(clrs)
             rw, rh = proc.size if self._get_logical(self.mode_switch.get(), "save_mode") == "Pixelate" else self.original_size
             self.res_label.configure(text=f"{rw} x {rh}")
-        except: pass
+        except Exception as e:
+            debug_log(f"[UI] Secondary UI update failed: {e}")
 
-    def _on_processing_complete(self, proc, prev=None):
+    def _on_processing_complete(self, proc, prev=None, original_size=None):
         self._is_processing = False
+        # Write self.original_size from the main thread only — never from a background thread.
+        if original_size is not None:
+            self.original_size = original_size
         
         # Restore interactive guide if in Manual mode, otherwise clear
         bg_mode = self._get_logical(self.option_bg_mode.get(), "bg_mode")
