@@ -11,8 +11,7 @@ import time
 # Import core logic
 from core.common import TaskManager, OperationCancelled, debug_log
 from core.processor import (EngineDispatcher, pixelate_image, upscale_for_preview, add_outline,
-                            remove_background, apply_grain_effect, remove_background_ai,
-                            remove_background_interactive, is_directml_supported,
+                            remove_background, apply_grain_effect, is_directml_supported,
                             normalize_image_geometry, dispatch_background_removal)
 from core.palette import apply_palette_unified
 from core.project_manager import ProjectManager

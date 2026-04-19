@@ -141,7 +141,9 @@ class EngineDispatcher:
             ordered.append("CPUExecutionProvider")
 
         debug_log(f"[Pixlato] rembg provider order: {ordered}")
-        cls._providers_cache = ordered
+        # Store a copy so callers cannot mutate the cached list
+        cls._providers_cache = list(ordered)
+        # _has_cuda is already set above; no need to re-set on cache hits
         return ordered
 
 def enhance_internal_edges(img, sensitivity=1.0):
