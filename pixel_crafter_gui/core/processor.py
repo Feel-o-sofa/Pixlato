@@ -85,7 +85,11 @@ class EngineDispatcher:
         """
         Single source of truth for rembg/ONNX provider priority.
 
-        Priority order:
+        Respects EngineDispatcher._mode:
+          - 'cpu': always returns CPU-only, regardless of available hardware.
+          - 'auto' / 'gpu': probes hardware and returns ordered provider list.
+
+        Priority order (non-CPU modes):
           1. CUDAExecutionProvider  — NVIDIA GPU, lowest latency
           2. DmlExecutionProvider   — DirectML (AMD/Intel/NVIDIA, Windows universal)
           3. CPUExecutionProvider   — CPU fallback, always present
@@ -96,6 +100,12 @@ class EngineDispatcher:
         Returns:
             list[str]: Ordered provider list ready to pass to rembg.new_session().
         """
+        # Respect explicit CPU mode: bypass all GPU providers
+        if cls._mode == "cpu":
+            cls._has_cuda = False
+            debug_log("[Pixlato] rembg: CPU mode forced — skipping GPU provider probe.")
+            return ["CPUExecutionProvider"]
+
         try:
             import onnxruntime as ort
             available = ort.get_available_providers()
@@ -394,8 +404,10 @@ def remove_background_interactive(img, bg_seeds, fg_seeds=None):
         try:
             from core.processor_torch import remove_background_interactive_torch
             return remove_background_interactive_torch(img, bg_seeds, fg_seeds)
-        except ImportError:
-            debug_log("[Pixlato] processor_torch unavailable; falling back to CPU GrabCut.")
+        except Exception as e:
+            # Catch all exceptions (ImportError, cv2.error, OOM, etc.) so the
+            # CPU path below is always reachable as a guaranteed fallback.
+            debug_log(f"[Pixlato] GPU interactive BG removal failed ({type(e).__name__}: {e}); falling back to CPU GrabCut.")
 
     # CPU path: direct OpenCV GrabCut
     try:
