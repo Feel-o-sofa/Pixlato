@@ -81,9 +81,9 @@ type: `feat` / `fix` / `refactor` / `chore` / `docs`
 
 | 항목 | 위치 | 우선순위 | 설명 |
 |---|---|---|---|
-| Dead Code | `processor_torch.py#remove_background_ai_torch` | LOW | Deprecated 처리 완료 (Phase-59). Phase-60에서 제거 예정 |
-| 세션 이중화 | `processor.py:REMBG_SESSION` / `processor_torch.py:_REMBG_SESSION` | LOW | 동일 모델 2개 세션. `_REMBG_SESSION`은 Deprecated 함수 전용 — Phase-60 함수 제거 시 함께 삭제 |
-| `_build_rembg_providers` 캐싱 없음 | `processor.py:84` | LOW | 세션 리셋 시 재호출됨. 성능 영향 미미하나 방어적 캐싱 검토 |
+| ~~Dead Code~~ | ~~`processor_torch.py#remove_background_ai_torch`~~ | ~~LOW~~ | ✅ Phase-60에서 제거 완료 |
+| ~~세션 이중화~~ | ~~`processor.py:REMBG_SESSION` / `processor_torch.py:_REMBG_SESSION`~~ | ~~LOW~~ | ✅ Phase-60에서 `_REMBG_SESSION` 제거, 단일 세션으로 통합 완료 |
+| ~~`_build_rembg_providers` 캐싱 없음~~ | ~~`processor.py:84`~~ | ~~LOW~~ | ✅ Phase-60에서 `_providers_cache` 추가 완료 |
 | Interactive 모드 UI 미구현 | `ui/app.py` | MEDIUM | `bg_seeds` 수집 로직 없어 실제 사용 불가 |
 | `_update_secondary_ui` 락 없음 | `ui/app.py#_update_secondary_ui` | LOW | `self.original_size`를 락 없이 읽음. 스레드 재진입 시 stale `(0,0)` 반환 가능. Phase-60 이전에 `hasattr` 가드 추가 검토 |
 | Plugin sandbox `getattr`/`setattr` | `core/plugin_engine.py#_load_plugin` | LOW | exec 샌드박스 내 `getattr`으로 `__class__.__mro__` 체인 순회 가능. 별도 보안 강화 Phase에서 검토 |
